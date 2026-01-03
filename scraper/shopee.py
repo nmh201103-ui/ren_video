@@ -41,6 +41,14 @@ class ShopeeScraper(BaseScraper):
                 title = self._get_title(page)
                 price = self._get_price(page)
                 
+                # Kiểm tra và thay thế giá trị None bằng chuỗi rỗng hoặc giá trị mặc định
+                if not title:
+                    title = "Sản phẩm Shopee"
+                if not price:
+                    price = "0"
+                if not raw_images:
+                    raw_images = []
+
                 data = {
                     "title": title,
                     "price": price,
