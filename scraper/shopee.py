@@ -91,14 +91,30 @@ class ShopeeScraper(BaseScraper):
 
     def _get_price(self, page) -> str:
         try:
-            # Lấy giá từ meta tag để tránh sai sót giao diện
+            # Lấy giá từ meta tag nếu có
             price = page.evaluate("document.querySelector('meta[property=\"product:price:amount\"]')?.content")
-            if price: return price
+            if price: 
+                return price.strip()
             
-            price_el = page.locator(".pq6u9U, .G-uSTW, .p86s3C, ._2Sh_1t").first
-            return re.sub(r"\D", "", price_el.inner_text())
-        except:
+            # Trường hợp giá hiển thị dạng phạm vi (min-max)
+            price_el = page.locator(".IZPeQz.B67UQ0").first
+            if price_el.is_visible():
+                price = price_el.inner_text().strip()
+                min_price, max_price = price.split(' - ') if ' - ' in price else (price, price)
+                return min_price.strip()  # Lấy giá thấp nhất
+
+            # Trường hợp giá hiện tại (nếu có)
+            price_el = page.locator(".ZA5sW5").first
+            if price_el.is_visible():
+                price = price_el.inner_text().strip()
+                return price
+            
+            return "0"  # Nếu không có giá nào hợp lệ, trả về giá mặc định là 0
+        except Exception as e:
+            logger.error(f"❌ Lỗi lấy giá: {e}")
             return "0"
+
+
 
     def _get_images(self, page) -> List[str]:
         """Phương pháp 1: Quét DOM tìm thẻ img và picture"""
@@ -141,17 +157,16 @@ class ShopeeScraper(BaseScraper):
 
     def _get_description(self, page) -> str:
         try:
-            # Thử lấy từ Meta tag description
-            meta_desc = page.evaluate("document.querySelector('meta[property=\"og:description\"]')?.content")
-            if meta_desc and len(meta_desc) > 50: return meta_desc
+            # Lấy mô tả từ phần tử có class "QN2lPu"
+            description_elements = page.locator('.QN2lPu')
+            description = " ".join([el.inner_text() for el in description_elements])
+            if description:
+                return description.strip()
+            return "Mô tả không có sẵn."
+        except Exception as e:
+            logger.error(f"❌ Lỗi lấy mô tả: {e}")
+            return "Mô tả không có sẵn."
 
-            return page.evaluate("""() => {
-                const els = Array.from(document.querySelectorAll('div, span, p'))
-                    .filter(el => window.getComputedStyle(el).whiteSpace === 'pre-wrap' && el.innerText.length > 50);
-                return els.length > 0 ? els[0].innerText : "";
-            }""")
-        except:
-            return ""
 
     def _empty(self, url: str) -> Dict:
         return {"title": "Không lấy được dữ liệu", "price": "0", "image_urls": [], "description": "", "platform": "shopee", "original_url": url}
