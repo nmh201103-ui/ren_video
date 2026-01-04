@@ -1,185 +1,213 @@
 import os
 import tempfile
 import requests
+import textwrap
+import re
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import concatenate_videoclips, AudioFileClip, ImageClip, vfx
+from moviepy.editor import (
+    AudioFileClip, 
+    ImageClip, 
+    CompositeAudioClip,
+    CompositeVideoClip
+)
 from gtts import gTTS
 from .templates import TEMPLATE_DEFAULT
 from utils.logger import get_logger
-import textwrap
 
 logger = get_logger()
-
 
 class VideoRenderer:
     def __init__(self, template=None):
         self.template = template or TEMPLATE_DEFAULT
         self._temp_files = []
 
-    def render(self, processed_data: dict, output_path: str, max_images: int = 5, audio_path: str = None) -> bool:
+    def render(self, processed_data: dict, output_path: str, max_images: int = 10, audio_path: str = None) -> bool:
         try:
-            # Đảm bảo thư mục output tồn tại
             self._ensure_directory(os.path.dirname(output_path))
 
-            # Lấy dữ liệu từ processed_data
-            images = processed_data.get("image_urls", [])  # Lấy trực tiếp list string
-            title = processed_data.get("title", "Sản phẩm Hot")
-            price = processed_data.get("price", "0")
-            description = processed_data.get("description", "")
+            # 1. TRUY XUẤT DỮ LIỆU ĐA KÊNH (CHỐNG MẤT DỮ LIỆU)
+            images = processed_data.get("image_urls", [])
+            title = str(processed_data.get("title", "Sản phẩm Hot"))
+            
+            # Ưu tiên lấy 'description', nếu không có thì lấy 'short_description'
+            desc_raw = processed_data.get("description") or processed_data.get("short_description") or ""
+            description = str(desc_raw).strip()
 
-            logger.info(f"📝 Mô tả sản phẩm: {description}")
+            # --- LOG KIỂM TRA ĐẦU VÀO ---
+            print("\n" + "🎬" * 10 + " [RENDERER PROCESS] " + "🎬" * 10)
+            print(f"TITLE: {title}")
+            print(f"MÔ TẢ NHẬN ĐƯỢC: {len(description)} ký tự")
+            
+            if len(description) < 20:
+                logger.warning("⚠️ Mô tả quá ngắn hoặc rỗng, dùng nội dung dự phòng.")
+                description = f"Chào mừng bạn đến với {title}. Đây là sản phẩm tuyệt vời nhất với chất lượng vượt trội, giá cả phải chăng. Đừng bỏ lỡ cơ hội sở hữu ngay hôm nay!"
+            
+            print("🎬" * 30 + "\n")
 
-            if not description.strip():
-                logger.warning("⚠️ Mô tả sản phẩm rỗng, dùng fallback.")
-                description = "Sản phẩm này có các tính năng tuyệt vời mà bạn không thể bỏ qua!"
-
-            if not images:
-                logger.error("❌ Không có ảnh để render video!")
-                return False
-
-            # Phân đoạn mô tả thành các phần nhỏ
-            description_parts = self.split_description(description)
-            logger.info(f"📝 Phân đoạn mô tả thành {len(description_parts)} phần.")
-            logger.info(f"🔹 Tổng ảnh nhận được: {len(images)}")
+            # 2. PHÂN ĐOẠN MÔ TẢ THÔNG MINH
+            # Tách theo dấu chấm, xuống dòng và lọc bỏ câu quá ngắn
+            sentences = [s.strip() for s in re.split(r'[.!?\n]\s*', description) if len(s.strip()) > 10]
+            
+            if not sentences:
+                sentences = textwrap.wrap(description, width=80)
 
             clips = []
+            audio_segments = []
+            current_time = 0
 
-            # Clip tiêu đề
-            title_clip = self._text_clip(title, 70, "#FFFFFF", 2.5, animation_type="fade_in")
+            # 3. CLIP TIÊU ĐỀ (INTRO - 3 GIÂY)
+            title_clip = self._text_clip(title, 60, "#FFD700", 3.0, animation_type="fade_in")
+            title_clip = title_clip.set_start(0)
             clips.append(title_clip)
+            current_time += 3.0
 
-            # Tạo các clip ảnh + mô tả
-            success_img = 0
-            for i, url in enumerate(images[:max_images]):
-                desc = description_parts[i] if i < len(description_parts) else ""
-                logger.info(f"📸 Đang tải ảnh {i + 1}: {url}")
-                clip = self.render_image_clip(url, desc, 4)
-                if clip:
-                    clips.append(clip)
-                    success_img += 1
+            # 4. VÒNG LẶP TẠO CLIP ẢNH + GIỌNG ĐỌC
+            target_images = images[:max_images]
+            for i, url in enumerate(target_images):
+                # Lấy câu mô tả tương ứng, nếu hết câu thì dùng câu cuối cùng
+                part_text = sentences[i] if i < len(sentences) else sentences[-1]
+                
+                # Tạo Voiceover
+                voice_path = self.create_voiceover(part_text)
+                if not voice_path:
+                    continue
+                    
+                audio_clip = AudioFileClip(voice_path)
+                # Thời lượng clip = độ dài giọng nói + 0.6s nghỉ
+                duration = audio_clip.duration + 0.6
+                
+                # Tạo Image Clip với Text chèn đè
+                img_clip = self.render_image_clip(url, part_text, duration)
+                
+                if img_clip:
+                    # Thiết lập thời điểm bắt đầu cho cả audio và video
+                    img_clip = img_clip.set_start(current_time)
+                    audio_clip = audio_clip.set_start(current_time)
+                    
+                    clips.append(img_clip)
+                    audio_segments.append(audio_clip)
+                    
+                    current_time += duration
+                    logger.info(f"✅ Đã tạo Clip {i+1}/{len(target_images)}")
 
-            if success_img == 0:
-                logger.error("❌ Không tải được ảnh nào từ internet.")
+            if len(clips) <= 1:
+                logger.error("❌ Không đủ tài nguyên (ảnh/text) để xuất video.")
                 return False
 
-            # Tạo giọng đọc cho video (phân đoạn cho từng mô tả)
-            voiceover_audio = None
-            for part in description_parts:
-                part_voiceover = self.create_voiceover(part)
-                if part_voiceover:
-                    if not voiceover_audio:
-                        voiceover_audio = AudioFileClip(part_voiceover)
-                    else:
-                        voiceover_audio = concatenate_videoclips([voiceover_audio, AudioFileClip(part_voiceover)])
-
-            # Đồng bộ thời gian audio với video
-            video_duration = sum(c.duration for c in clips)
-            audio_duration = voiceover_audio.duration if voiceover_audio else 0
-            if voiceover_audio and audio_duration > video_duration:
-                clips[-1] = clips[-1].set_duration(clips[-1].duration + (audio_duration - video_duration))
-
-            # Kết hợp các clip
-            final = concatenate_videoclips(clips)
-            if voiceover_audio:
-                final = final.set_audio(voiceover_audio)
-
-            # Thêm nhạc nền nếu có
+            # 5. MIX AUDIO & EXPORT
+            # Dùng CompositeVideoClip để khớp timeline chính xác hơn concatenate
+            final_video = CompositeVideoClip(clips).set_duration(current_time)
+            
+            voice_audio = CompositeAudioClip(audio_segments)
+            
+            # Nhạc nền (nếu có)
             if audio_path and os.path.exists(audio_path):
-                audio_bg = AudioFileClip(audio_path).subclip(0, final.duration)
-                final = final.set_audio(audio_bg)
+                bg_music = AudioFileClip(audio_path).volumex(0.12).set_duration(current_time)
+                final_audio = CompositeAudioClip([voice_audio, bg_music])
+            else:
+                final_audio = voice_audio
 
-            # Xuất video
-            final.write_videofile(output_path, codec="libx264", audio=True, threads=4, fps=60)
-            final.close()
-
-            self._cleanup()  # Xóa các file tạm
+            final_video = final_video.set_audio(final_audio)
+            
+            # Xuất video chất lượng cao
+            final_video.write_videofile(
+                output_path, 
+                codec="libx264", 
+                audio_codec="aac", 
+                fps=24, 
+                threads=4, 
+                preset="medium",
+                logger=None
+            )
+            
+            final_video.close()
+            self._cleanup()
             return True
+
         except Exception as e:
-            logger.error(f"❌ Render FAILED: {e}")
+            logger.error(f"❌ Render Error: {e}")
             return False
 
-    # -------------------------
-    def split_description(self, description, max_length=150):
-        """Phân đoạn mô tả sản phẩm thành các phần ngắn, tránh quá dài."""
-        return textwrap.wrap(description, width=max_length)
-
-    # -------------------------
     def render_image_clip(self, url, description, duration):
-        """Render ảnh với mô tả và thời gian hợp lý."""
         try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get(url, headers=headers)
-            r.raise_for_status()
-
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
             img = Image.open(BytesIO(r.content)).convert("RGB")
             tw, th = self.template.width, self.template.height
-            img.thumbnail((tw, th - 150), Image.Resampling.LANCZOS)
+            
+            # Canvas đen chuẩn TikTok (9:16)
+            canvas = Image.new("RGB", (tw, th), (18, 18, 18))
+            
+            # Resize ảnh sản phẩm (để chừa chỗ cho text ở dưới)
+            img.thumbnail((tw - 80, th - 600), Image.Resampling.LANCZOS)
+            
+            # Paste ảnh vào giữa phần trên
+            offset = ((tw - img.width) // 2, (th - 600 - img.height) // 2 + 150)
+            canvas.paste(img, offset)
 
-            canvas = Image.new("RGB", (tw, th), (0, 0, 0))
-            canvas.paste(img, ((tw - img.width) // 2, (th - 150 - img.height) // 2))
-
+            # Vẽ Text
             if description:
                 draw = ImageDraw.Draw(canvas)
-                try:
-                    font = ImageFont.truetype("arial.ttf", 35)
-                except:
+                try: 
+                    # Ưu tiên font Arial, nếu không có dùng font mặc định
+                    font = ImageFont.truetype("arial.ttf", 38)
+                except: 
                     font = ImageFont.load_default()
-                draw.text((tw // 2, th - 80), description, fill="white", font=font, anchor="mm", align="center")
+                
+                # Wrap text để không bị tràn màn hình
+                wrapped_text = "\n".join(textwrap.wrap(description, width=30))
+                
+                # Căn lề text ở 1/4 dưới màn hình
+                draw.text((tw // 2, th - 300), wrapped_text, fill="white", font=font, anchor="mm", align="center")
 
             path = self._save_temp(canvas)
-            clip = ImageClip(path, duration=duration).fadein(0.5)
-            return clip
+            return ImageClip(path, duration=duration).fadein(0.4)
         except Exception as e:
-            logger.warning(f"⚠️ Lỗi tải ảnh: {url} - {e}")
+            logger.warning(f"⚠️ Lỗi render ảnh {url}: {e}")
             return None
 
-    # -------------------------
-    def create_voiceover(self, description, language='vi'):
-        """Tạo giọng đọc cho từng phần mô tả."""
+    def create_voiceover(self, text):
+        if not text or len(text.strip()) < 2: return None
         try:
-            tts = gTTS(description, lang=language)
-            voiceover_path = tempfile.mktemp(suffix='.mp3')
-            tts.save(voiceover_path)
-            return voiceover_path
-        except Exception as e:
-            logger.error(f"❌ Lỗi khi tạo giọng đọc: {e}")
-            return None
+            f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            tts = gTTS(text=text, lang='vi')
+            tts.save(f.name)
+            self._temp_files.append(f.name)
+            return f.name
+        except: return None
 
-    # -------------------------
     def _text_clip(self, text, size, color, duration, animation_type="none"):
-        img = Image.new("RGB", (self.template.width, self.template.height), (20, 20, 20))
+        # Tạo clip tiêu đề nghệ thuật hơn
+        tw, th = self.template.width, self.template.height
+        img = Image.new("RGB", (tw, th), (25, 25, 25))
         draw = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("arial.ttf", size)
-        except:
-            font = ImageFont.load_default()
-        draw.text((self.template.width//2, self.template.height//2), text, fill=color, font=font, anchor="mm", align="center")
-        clip = ImageClip(self._save_temp(img), duration=duration)
-        if animation_type == "fade_in":
-            clip = clip.fadein(0.5)
-        elif animation_type == "fade_out":
-            clip = clip.fadeout(0.5)
-        elif animation_type == "slide_up":
-            clip = clip.fx(vfx.scroll, 100, 0)
+        
+        try: font = ImageFont.truetype("arial.ttf", size)
+        except: font = ImageFont.load_default()
+        
+        wrapped_text = "\n".join(textwrap.wrap(text, width=22))
+        
+        # Vẽ tiêu đề ở chính giữa màn hình
+        draw.text((tw // 2, th // 2), wrapped_text, fill=color, font=font, anchor="mm", align="center")
+        
+        path = self._save_temp(img)
+        clip = ImageClip(path, duration=duration)
+        if animation_type == "fade_in": clip = clip.fadein(0.8)
         return clip
 
-    # -------------------------
     def _save_temp(self, img):
         f = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-        img.save(f.name, quality=90)
+        img.save(f.name, quality=95)
         self._temp_files.append(f.name)
         return f.name
 
-    # -------------------------
     def _ensure_directory(self, directory):
-        if not os.path.exists(directory):
+        if directory and not os.path.exists(directory):
             os.makedirs(directory)
 
-    # -------------------------
     def _cleanup(self):
         for f in self._temp_files:
             try:
-                os.remove(f)
-            except Exception as e:
-                logger.warning(f"⚠️ Lỗi khi xóa file tạm: {f} - {e}")
+                if os.path.exists(f): os.remove(f)
+            except: pass
+        self._temp_files = []
