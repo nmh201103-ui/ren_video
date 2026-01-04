@@ -4,7 +4,7 @@ import requests
 import textwrap
 import re
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy.editor import (
     AudioFileClip, 
     ImageClip, 
@@ -26,47 +26,40 @@ class VideoRenderer:
         try:
             self._ensure_directory(os.path.dirname(output_path))
 
-            # 1. TRUY XUẤT DỮ LIỆU ĐA KÊNH (CHỐNG MẤT DỮ LIỆU)
+            # 1. TRUY XUẤT DỮ LIỆU
             images = processed_data.get("image_urls", [])
             title = str(processed_data.get("title", "Sản phẩm Hot"))
-            
-            # Ưu tiên lấy 'description', nếu không có thì lấy 'short_description'
             desc_raw = processed_data.get("description") or processed_data.get("short_description") or ""
             description = str(desc_raw).strip()
 
-            # --- LOG KIỂM TRA ĐẦU VÀO ---
-            print("\n" + "🎬" * 10 + " [RENDERER PROCESS] " + "🎬" * 10)
-            print(f"TITLE: {title}")
-            print(f"MÔ TẢ NHẬN ĐƯỢC: {len(description)} ký tự")
-            
-            if len(description) < 20:
-                logger.warning("⚠️ Mô tả quá ngắn hoặc rỗng, dùng nội dung dự phòng.")
-                description = f"Chào mừng bạn đến với {title}. Đây là sản phẩm tuyệt vời nhất với chất lượng vượt trội, giá cả phải chăng. Đừng bỏ lỡ cơ hội sở hữu ngay hôm nay!"
-            
-            print("🎬" * 30 + "\n")
-
             # 2. PHÂN ĐOẠN MÔ TẢ THÔNG MINH
-            # Tách theo dấu chấm, xuống dòng và lọc bỏ câu quá ngắn
-            sentences = [s.strip() for s in re.split(r'[.!?\n]\s*', description) if len(s.strip()) > 10]
-            
+            raw_sentences = re.split(r'[\n✅📌✔️•\-\t]|(?<=[.!?])\s+', description)
+            sentences = [s.strip() for s in raw_sentences if len(s.strip()) > 10]
+
+            # --- BỔ SUNG: Nếu lấy được quá ít câu, tự động chặt nhỏ câu dài ---
+            if len(sentences) < 3 and len(description) > 100:
+                logger.info("⚠️ Nội dung quá ít câu, đang tự động chia nhỏ theo độ dài...")
+                sentences = textwrap.wrap(description, width=80) # Chặt mỗi 80 ký tự thành 1 câu thoại
+
             if not sentences:
-                sentences = textwrap.wrap(description, width=80)
+                sentences = [title] # Cuối cùng nếu vẫn rỗng thì lấy Title làm thoại
+
+            logger.info(f"🎬 Bắt đầu Render: {len(images)} ảnh | Phân tách thành {len(sentences)} câu thoại.")
 
             clips = []
             audio_segments = []
             current_time = 0
 
-            # 3. CLIP TIÊU ĐỀ (INTRO - 3 GIÂY)
-            title_clip = self._text_clip(title, 60, "#FFD700", 3.0, animation_type="fade_in")
-            title_clip = title_clip.set_start(0)
-            clips.append(title_clip)
+            # 3. CLIP TIÊU ĐỀ (INTRO)
+            title_clip = self._text_clip(title, 65, "#FFD700", 3.0, is_intro=True)
+            clips.append(title_clip.set_start(0))
             current_time += 3.0
 
-            # 4. VÒNG LẶP TẠO CLIP ẢNH + GIỌNG ĐỌC
+            # 4. VÒNG LẶP TẠO CLIP ẢNH + VOICE
             target_images = images[:max_images]
             for i, url in enumerate(target_images):
-                # Lấy câu mô tả tương ứng, nếu hết câu thì dùng câu cuối cùng
-                part_text = sentences[i] if i < len(sentences) else sentences[-1]
+                # Lấy câu thoại theo vòng lặp nếu ảnh nhiều hơn câu
+                part_text = sentences[i % len(sentences)]
                 
                 # Tạo Voiceover
                 voice_path = self.create_voiceover(part_text)
@@ -74,14 +67,11 @@ class VideoRenderer:
                     continue
                     
                 audio_clip = AudioFileClip(voice_path)
-                # Thời lượng clip = độ dài giọng nói + 0.6s nghỉ
-                duration = audio_clip.duration + 0.6
+                # Thời lượng = tiếng nói + 0.8s nghỉ để video không bị dồn dập
+                duration = max(audio_clip.duration + 0.8, 2.5) 
                 
-                # Tạo Image Clip với Text chèn đè
                 img_clip = self.render_image_clip(url, part_text, duration)
-                
                 if img_clip:
-                    # Thiết lập thời điểm bắt đầu cho cả audio và video
                     img_clip = img_clip.set_start(current_time)
                     audio_clip = audio_clip.set_start(current_time)
                     
@@ -89,35 +79,30 @@ class VideoRenderer:
                     audio_segments.append(audio_clip)
                     
                     current_time += duration
-                    logger.info(f"✅ Đã tạo Clip {i+1}/{len(target_images)}")
+                    logger.info(f"✅ Đã xử lý Clip {i+1}: {part_text[:30]}...")
 
             if len(clips) <= 1:
-                logger.error("❌ Không đủ tài nguyên (ảnh/text) để xuất video.")
+                logger.error("❌ Không đủ dữ liệu để tạo video.")
                 return False
 
-            # 5. MIX AUDIO & EXPORT
-            # Dùng CompositeVideoClip để khớp timeline chính xác hơn concatenate
-            final_video = CompositeVideoClip(clips).set_duration(current_time)
+            # 5. MIXING & EXPORT
+            final_video = CompositeVideoClip(clips, size=(self.template.width, self.template.height))
             
             voice_audio = CompositeAudioClip(audio_segments)
-            
-            # Nhạc nền (nếu có)
             if audio_path and os.path.exists(audio_path):
                 bg_music = AudioFileClip(audio_path).volumex(0.12).set_duration(current_time)
                 final_audio = CompositeAudioClip([voice_audio, bg_music])
             else:
                 final_audio = voice_audio
 
-            final_video = final_video.set_audio(final_audio)
+            final_video = final_video.set_audio(final_audio).set_duration(current_time)
             
-            # Xuất video chất lượng cao
             final_video.write_videofile(
                 output_path, 
                 codec="libx264", 
                 audio_codec="aac", 
                 fps=24, 
                 threads=4, 
-                preset="medium",
                 logger=None
             )
             
@@ -135,39 +120,50 @@ class VideoRenderer:
             img = Image.open(BytesIO(r.content)).convert("RGB")
             tw, th = self.template.width, self.template.height
             
-            # Canvas đen chuẩn TikTok (9:16)
-            canvas = Image.new("RGB", (tw, th), (18, 18, 18))
+            # 1. Tạo nền (Phông nền tối cho TikTok)
+            canvas = Image.new("RGB", (tw, th), (20, 20, 20))
             
-            # Resize ảnh sản phẩm (để chừa chỗ cho text ở dưới)
-            img.thumbnail((tw - 80, th - 600), Image.Resampling.LANCZOS)
-            
-            # Paste ảnh vào giữa phần trên
-            offset = ((tw - img.width) // 2, (th - 600 - img.height) // 2 + 150)
-            canvas.paste(img, offset)
+            # 2. Xử lý ảnh sản phẩm (Nằm ở nửa trên)
+            img.thumbnail((tw - 100, th - 650), Image.Resampling.LANCZOS)
+            img_pos = ((tw - img.width) // 2, 180)
+            canvas.paste(img, img_pos)
 
-            # Vẽ Text
+            # 3. Chèn Text với Box nền mờ (Để luôn đọc được chữ)
             if description:
                 draw = ImageDraw.Draw(canvas)
-                try: 
-                    # Ưu tiên font Arial, nếu không có dùng font mặc định
-                    font = ImageFont.truetype("arial.ttf", 38)
-                except: 
-                    font = ImageFont.load_default()
+                try: font = ImageFont.truetype("arial.ttf", 42)
+                except: font = ImageFont.load_default()
                 
-                # Wrap text để không bị tràn màn hình
-                wrapped_text = "\n".join(textwrap.wrap(description, width=30))
+                wrapped_text = "\n".join(textwrap.wrap(description, width=28))
                 
-                # Căn lề text ở 1/4 dưới màn hình
-                draw.text((tw // 2, th - 300), wrapped_text, fill="white", font=font, anchor="mm", align="center")
+                # Tính toán kích thước Box nền
+                bbox = draw.multiline_textbbox((tw // 2, th - 350), wrapped_text, font=font, anchor="mm")
+                padding = 25
+                # Vẽ hình chữ nhật bo góc/mờ (giả lập mờ bằng rectangle xám đen)
+                draw.rectangle(
+                    [bbox[0]-padding, bbox[1]-padding, bbox[2]+padding, bbox[3]+padding], 
+                    fill=(0, 0, 0, 180)
+                )
+                
+                # Vẽ text chính
+                draw.multiline_text(
+                    (tw // 2, th - 350), 
+                    wrapped_text, 
+                    fill="white", 
+                    font=font, 
+                    anchor="mm", 
+                    align="center",
+                    spacing=10
+                )
 
             path = self._save_temp(canvas)
             return ImageClip(path, duration=duration).fadein(0.4)
         except Exception as e:
-            logger.warning(f"⚠️ Lỗi render ảnh {url}: {e}")
+            logger.warning(f"⚠️ Lỗi render ảnh: {e}")
             return None
 
     def create_voiceover(self, text):
-        if not text or len(text.strip()) < 2: return None
+        if not text: return None
         try:
             f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
             tts = gTTS(text=text, lang='vi')
@@ -176,10 +172,9 @@ class VideoRenderer:
             return f.name
         except: return None
 
-    def _text_clip(self, text, size, color, duration, animation_type="none"):
-        # Tạo clip tiêu đề nghệ thuật hơn
+    def _text_clip(self, text, size, color, duration, is_intro=False):
         tw, th = self.template.width, self.template.height
-        img = Image.new("RGB", (tw, th), (25, 25, 25))
+        img = Image.new("RGB", (tw, th), (15, 15, 15))
         draw = ImageDraw.Draw(img)
         
         try: font = ImageFont.truetype("arial.ttf", size)
@@ -187,13 +182,12 @@ class VideoRenderer:
         
         wrapped_text = "\n".join(textwrap.wrap(text, width=22))
         
-        # Vẽ tiêu đề ở chính giữa màn hình
-        draw.text((tw // 2, th // 2), wrapped_text, fill=color, font=font, anchor="mm", align="center")
+        # Tiêu đề chính giữa cho Intro
+        draw.multiline_text((tw // 2, th // 2), wrapped_text, fill=color, font=font, anchor="mm", align="center")
         
         path = self._save_temp(img)
         clip = ImageClip(path, duration=duration)
-        if animation_type == "fade_in": clip = clip.fadein(0.8)
-        return clip
+        return clip.fadein(0.8).fadeout(0.5)
 
     def _save_temp(self, img):
         f = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
