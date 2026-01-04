@@ -1,172 +1,175 @@
 import re
-import json
 from typing import Dict, List
 from playwright.sync_api import sync_playwright
 from scraper.base import BaseScraper
 from utils.logger import get_logger
+import time
 
 logger = get_logger()
 
+
 class ShopeeScraper(BaseScraper):
+    MAX_DESC_RETRIES = 5  # số lần scroll thử lấy mô tả
+    SCROLL_STEP = 500     # px mỗi lần scroll
+    SCROLL_WAIT = 1.0     # giây chờ sau mỗi lần scroll
+
     def scrape(self, url: str) -> Dict:
+        """
+        Lấy dữ liệu Shopee theo thứ tự:
+        1. Lấy title, price, images trước.
+        2. Scroll xuống lấy description.
+        3. Trả data đầy đủ cho renderer.
+        """
         logger.info(f"🔗 Kết nối tới Chrome (9222)...")
         with sync_playwright() as p:
             try:
                 browser = p.chromium.connect_over_cdp("http://localhost:9222")
                 context = browser.contexts[0]
-                page = next((pge for pge in context.pages if "shopee.vn" in pge.url), None)
+                page = next((pg for pg in context.pages if "shopee.vn" in pg.url), None)
                 if not page:
                     page = context.new_page()
 
-                # Cấu hình Header chống bị chặn
-                ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ua = (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
                 page.set_extra_http_headers({"User-Agent": ua})
 
                 if url not in page.url:
                     page.goto(url, wait_until="networkidle", timeout=60000)
-
-                # Chờ cho các thành phần chính hiện ra
                 page.wait_for_timeout(2000)
-                self._force_load(page)
 
-                # Lấy danh sách ảnh bằng nhiều cách khác nhau
-                raw_images = self._get_images(page)
-                
-                # Nếu vẫn không có ảnh, dùng phương pháp Regex quét toàn bộ Source Code
-                if not raw_images:
-                    logger.warning("⚠️ Không tìm thấy ảnh bằng DOM, đang thử quét Regex...")
-                    raw_images = self._get_images_regex(page)
+                # -------------------------
+                # BƯỚC 1: Lấy title, price, images ở đầu trang
+                title = self._get_title(page) or "Sản phẩm Shopee"
+                price = self._get_price(page) or "0"
 
-                description = self._get_description(page)
-                title = self._get_title(page)
-                price = self._get_price(page)
-                
-                # Kiểm tra và thay thế giá trị None bằng chuỗi rỗng hoặc giá trị mặc định
-                if not title:
-                    title = "Sản phẩm Shopee"
-                if not price:
-                    price = "0"
-                if not raw_images:
-                    raw_images = []
+                images = self._get_images(page)
+                if not images:
+                    images = self._get_images_regex(page)
 
+                logger.info(f"✅ Lấy xong ảnh/title/price: {len(images)} ảnh, {title}, {price}")
+
+                # -------------------------
+                # BƯỚC 2: Scroll xuống lấy mô tả
+                description = ""
+                for attempt in range(self.MAX_DESC_RETRIES):
+                    description = self._get_description(page)
+                    if description.strip():
+                        logger.info(f"✅ Lấy được mô tả sản phẩm sau {attempt+1} lần scroll, {len(description)} ký tự")
+                        break
+                    logger.info(f"⚠️ Mô tả chưa có, scroll lần {attempt + 1}/{self.MAX_DESC_RETRIES}")
+                    page.evaluate(f"window.scrollBy(0, {self.SCROLL_STEP})")
+                    page.wait_for_timeout(int(self.SCROLL_WAIT * 1000))
+
+                if not description.strip():
+                    logger.warning("⚠️ Không lấy được mô tả sản phẩm, dùng fallback text")
+
+                # -------------------------
+                # Trả dữ liệu đầy đủ cho renderer
                 data = {
                     "title": title,
                     "price": price,
-                    "image_urls": raw_images,
-                    "description": description,
+                    "image_urls": images or [],
+                    "description": description or "",
                     "platform": "shopee",
                     "original_url": url,
                 }
-                
-                logger.info(f"✅ Kết quả: {len(raw_images)} ảnh | Tiêu đề: {title[:30]}...")
+
+                logger.info(
+                    f"✅ DONE | {len(data['image_urls'])} ảnh | "
+                    f"Mô tả: {len(data['description'])} ký tự"
+                )
                 return data
+
             except Exception as e:
                 logger.error(f"❌ Scraper Error: {e}")
                 return self._empty(url)
 
-    def _force_load(self, page):
-        """Ép trang load ảnh bằng cách cuộn chuột và click xem thêm"""
-        try:
-            page.evaluate("window.scrollTo(0, 800)")
-            page.wait_for_timeout(1000)
-            # Tìm và bấm nút 'Xem thêm' mô tả nếu có
-            btn = page.locator('text="Xem thêm"').first
-            if btn.is_visible():
-                btn.click()
-        except:
-            pass
-
+    # -------------------------
     def _get_title(self, page) -> str:
         try:
-            # Ưu tiên lấy từ Meta tag vì nó luôn có và chuẩn
             title = page.evaluate("document.querySelector('meta[property=\"og:title\"]')?.content")
-            if title: return title.strip()
-            
-            selectors = ["h1", "._44qnta", "div.hpX4qW span", ".VpY09Z"]
-            for s in selectors:
-                el = page.locator(s).first
-                if el.is_visible(): return el.inner_text().strip()
-            return "Sản phẩm Shopee"
-        except: return "Sản phẩm Shopee"
+            if title:
+                return title.strip()
+            el = page.locator("h1").first
+            if el.is_visible():
+                return el.inner_text().strip()
+            return ""
+        except:
+            return ""
 
+    # -------------------------
     def _get_price(self, page) -> str:
         try:
-            # Lấy giá từ meta tag nếu có
             price = page.evaluate("document.querySelector('meta[property=\"product:price:amount\"]')?.content")
-            if price: 
+            if price:
                 return price.strip()
-            
-            # Trường hợp giá hiển thị dạng phạm vi (min-max)
-            price_el = page.locator(".IZPeQz.B67UQ0").first
-            if price_el.is_visible():
-                price = price_el.inner_text().strip()
-                min_price, max_price = price.split(' - ') if ' - ' in price else (price, price)
-                return min_price.strip()  # Lấy giá thấp nhất
-
-            # Trường hợp giá hiện tại (nếu có)
-            price_el = page.locator(".ZA5sW5").first
-            if price_el.is_visible():
-                price = price_el.inner_text().strip()
-                return price
-            
-            return "0"  # Nếu không có giá nào hợp lệ, trả về giá mặc định là 0
-        except Exception as e:
-            logger.error(f"❌ Lỗi lấy giá: {e}")
+            el = page.locator(".ZA5sW5").first
+            if el.is_visible():
+                return el.inner_text().strip()
+            el = page.locator(".IZPeQz").first
+            if el.is_visible():
+                return el.inner_text().split(" - ")[0].strip()
+            return "0"
+        except:
             return "0"
 
-
-
+    # -------------------------
     def _get_images(self, page) -> List[str]:
-        """Phương pháp 1: Quét DOM tìm thẻ img và picture"""
-        return page.evaluate("""() => {
-            const urls = new Set();
-            
-            // Lấy ảnh từ các thẻ meta (thường là ảnh đại diện đẹp nhất)
-            const ogImg = document.querySelector('meta[property="og:image"]')?.content;
-            if (ogImg) urls.add(ogImg.split('@')[0].split('_tn')[0]);
-
-            // Quét tất cả thẻ img có liên quan đến sản phẩm
-            document.querySelectorAll('img').forEach(img => {
-                const src = img.getAttribute('srcset')?.split(' ')[0] || img.getAttribute('data-src') || img.src;
-                if (src && (src.includes('susercontent.com') || src.includes('shopee.vn/file'))) {
-                    if (!src.includes('.svg') && !src.includes('icon')) {
-                        urls.add(src.split('@')[0].split('_tn')[0].split('_cover')[0]);
-                    }
-                }
-            });
-            return Array.from(urls).slice(0, 10);
-        }""")
-
-    def _get_images_regex(self, page) -> List[str]:
-        """Phương pháp 2: Quét trực tiếp trong Source Code (Dùng khi DOM bị ảo)"""
         try:
-            content = page.content()
-            # Tìm tất cả các mã ID ảnh Shopee (thường là chuỗi hex 32 ký tự)
-            img_ids = re.findall(r'vn-11134207-[a-z0-9-]+', content)
-            if not img_ids:
-                img_ids = re.findall(r'[a-f0-9]{32}', content)
-            
-            urls = []
-            for img_id in set(img_ids):
-                if len(img_id) >= 32: # ID ảnh Shopee chuẩn dài 32 ký tự
-                    urls.append(f"https://down-vn.img.susercontent.com/file/{img_id}")
-            
-            return urls[:10]
+            return page.evaluate("""() => {
+                const urls = new Set();
+                const og = document.querySelector('meta[property="og:image"]')?.content;
+                if (og) urls.add(og.split('@')[0]);
+                document.querySelectorAll('img').forEach(img => {
+                    const src = img.getAttribute('data-src') || img.src || '';
+                    if (!src) return;
+                    if (!src.includes('susercontent.com')) return;
+                    if (src.includes('.svg') || src.includes('icon')) return;
+                    urls.add(src.split('@')[0].split('_tn')[0]);
+                });
+                return Array.from(urls).slice(0, 10);
+            }""")
         except:
             return []
 
+    def _get_images_regex(self, page) -> List[str]:
+        try:
+            content = page.content()
+            ids = set(re.findall(r'vn-\d{8}-[a-z0-9-]+', content))
+            return [f"https://down-vn.img.susercontent.com/file/{i}" for i in list(ids)[:10]]
+        except:
+            return []
+
+    # -------------------------
     def _get_description(self, page) -> str:
         try:
-            # Lấy mô tả từ phần tử có class "QN2lPu"
-            description_elements = page.locator('.QN2lPu')
-            description = " ".join([el.inner_text() for el in description_elements])
-            if description:
-                return description.strip()
-            return "Mô tả không có sẵn."
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            desc_section = page.locator('section.I_DV_3:has(h2:has-text("MÔ TẢ SẢN PHẨM"))').first
+            desc_section.wait_for(state="attached", timeout=10000)
+
+            ps = desc_section.locator('div.e8lZp3 > div > p.QN2lPu')
+            count = ps.count()
+            texts = []
+            for i in range(count):
+                txt = ps.nth(i).inner_text().strip()
+                if txt and len(txt) > 5:
+                    texts.append(txt)
+            texts = list(dict.fromkeys(texts))
+            return "\n".join(texts)
         except Exception as e:
-            logger.error(f"❌ Lỗi lấy mô tả: {e}")
-            return "Mô tả không có sẵn."
+            logger.error(f"❌ Lỗi lấy mô tả sản phẩm: {e}")
+            return ""
 
-
+    # -------------------------
     def _empty(self, url: str) -> Dict:
-        return {"title": "Không lấy được dữ liệu", "price": "0", "image_urls": [], "description": "", "platform": "shopee", "original_url": url}
+        return {
+            "title": "Không lấy được dữ liệu",
+            "price": "0",
+            "image_urls": [],
+            "description": "",
+            "platform": "shopee",
+            "original_url": url,
+        }
