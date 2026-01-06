@@ -1,207 +1,233 @@
 import os
-import tempfile
-import requests
-import textwrap
 import re
+import tempfile
+import textwrap
+import json
 from io import BytesIO
+
+import requests
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import (
     AudioFileClip,
     ImageClip,
     CompositeAudioClip,
-    CompositeVideoClip
+    CompositeVideoClip,
 )
 from gtts import gTTS
-from .templates import TEMPLATE_DEFAULT
 from utils.logger import get_logger
 
 logger = get_logger()
 
-class VideoRenderer:
+
+class SmartVideoRenderer:
     def __init__(self, template=None):
-        self.template = template or TEMPLATE_DEFAULT
+        self.template = template or {"width": 720, "height": 1280, "fps": 24}
         self._temp_files = []
 
-    def render(self, processed_data: dict, output_path: str, max_images: int = 10, audio_path: str = None) -> bool:
+    # ====================== RENDER CHÍNH ======================
+    def render(self, processed_data: dict, output_path: str,
+               max_images: int = 8, audio_path: str = None) -> bool:
         try:
             self._ensure_directory(os.path.dirname(output_path))
 
-            # ================== 1. INPUT ==================
             images = processed_data.get("image_urls", [])
-            title = str(processed_data.get("title", "Sản phẩm Hot"))
+            title = processed_data.get("title", "Sản phẩm hot")
+            description = processed_data.get("description") or ""
+            price = str(processed_data.get("price", "")).strip()
 
-            raw_description = str(processed_data.get("description") or "").strip()
+            description = self._clean_text(description)
+            script = self._generate_script(title, description, price)
 
-            print("\n" + "🧪" * 15)
-            print(f"RENDERER DEBUG: Nhận được {len(raw_description)} ký tự mô tả (RAW).")
-            print("🧪" * 15 + "\n")
+            logger.info(f"🎬 Tạo video với {len(images[:max_images])} ảnh và {len(script)} câu thoại.")
 
-            # ================== 2. CLEAN AN TOÀN ==================
-            description = raw_description
-
-            # Xóa hashtag
-            description = re.sub(r'#\w+', '', description)
-
-            # ⚠️ CHỈ CẮT CAM KẾT NẾU NÓ NẰM SÂU (tránh mất hết nội dung)
-            for bad in ["Cửa hàng cam kết", "Cam kết mua sắm"]:
-                idx = description.find(bad)
-                if idx != -1 and idx > 200:
-                    description = description[:idx]
-
-            # Dọn ký tự trang trí
-            description = description.replace('*', '').replace('+', '').replace('-', ' ')
-            description = re.sub(r'\s+', ' ', description).strip()
-
-            # FAIL-SAFE: nếu clean xong mà rỗng → dùng bản gốc
-            if len(description) < 50:
-                logger.warning("⚠️ Clean quá tay → dùng lại mô tả gốc")
-                description = raw_description[:1000]
-
-            logger.debug(f"CLEAN CHECK: after clean = {len(description)} ký tự")
-
-            # ================== 3. TÁCH CÂU ==================
-            raw_chunks = re.split(r'[\n.:;!?•]', description)
-            sentences = [s.strip() for s in raw_chunks if len(s.strip()) > 10]
-
-            if len(sentences) < 5:
-                logger.info("⚠️ Văn bản đặc → chia theo độ dài")
-                sentences = textwrap.wrap(description, width=80, break_long_words=False)
-
-            if not sentences:
-                sentences = [
-                    title,
-                    "Sản phẩm chất lượng cao",
-                    "Thiết kế thời trang",
-                    "Mua ngay tại giỏ hàng"
-                ]
-
-            logger.info(f"🎬 Sẵn sàng Render: {len(images[:max_images])} ảnh | {len(sentences)} câu thoại.")
-
-            # ================== 4. BUILD VIDEO ==================
             clips = []
             audio_segments = []
             current_time = 0
 
-            # INTRO
-            intro = self._text_clip(title, 55, "#FFD700", 2.5)
-            clips.append(intro.set_start(0))
-            current_time += 2.5
+            # ================= INTRO =================
+            intro_clip = self._make_intro(title)
+            clips.append(intro_clip.set_start(current_time))
+            current_time += intro_clip.duration
 
-            # IMAGE + VOICE LOOP
+            # ================= SCENES =================
             for i, url in enumerate(images[:max_images]):
-                text = sentences[i % len(sentences)]
-
-                voice_path = self.create_voiceover(text)
-                if not voice_path:
+                sentence = script[i % len(script)]
+                voice_file = self._create_tts(sentence)
+                if not voice_file:
                     continue
+                audio_clip = AudioFileClip(voice_file)
+                duration = max(audio_clip.duration + 0.5, 3.0)
 
-                audio = AudioFileClip(voice_path)
-                duration = max(audio.duration + 0.5, 3.0)
-
-                img_clip = self.render_image_clip(url, text, duration)
+                img_clip = self._make_image_scene(url, sentence, duration, i)
                 if img_clip:
                     clips.append(img_clip.set_start(current_time))
-                    audio_segments.append(audio.set_start(current_time))
+                    audio_segments.append(audio_clip.set_start(current_time))
                     current_time += duration
-                    print(f"   + Clip {i+1}: {text[:40]}...")
+                    logger.info(f" + Scene {i+1}: {sentence[:50]}...")
 
-            # ================== 5. MIX ==================
-            final_video = CompositeVideoClip(clips, size=(self.template.width, self.template.height))
-            voice_audio = CompositeAudioClip(audio_segments)
+            # ================= OUTRO =================
+            cta_text = f"Chốt đơn ngay với giá {price}!\nNhanh tay kẻo hết!"
+            outro_clip = self._make_cta(cta_text)
+            clips.append(outro_clip.set_start(current_time))
+            outro_voice = self._create_tts(cta_text)
+            if outro_voice:
+                audio_segments.append(AudioFileClip(outro_voice).set_start(current_time))
+            current_time += outro_clip.duration
+
+            # ================= MIX AUDIO/VIDEO =================
+            video = CompositeVideoClip(clips, size=(self.template["width"], self.template["height"]))
+            audio = CompositeAudioClip(audio_segments)
 
             if audio_path and os.path.exists(audio_path):
-                bg = AudioFileClip(audio_path).volumex(0.1).set_duration(current_time)
-                final_video = final_video.set_audio(CompositeAudioClip([voice_audio, bg]))
+                bg_music = AudioFileClip(audio_path).volumex(0.08).set_duration(current_time)
+                video = video.set_audio(CompositeAudioClip([audio, bg_music]))
             else:
-                final_video = final_video.set_audio(voice_audio)
+                video = video.set_audio(audio)
 
-            final_video.write_videofile(
-                output_path,
-                codec="libx264",
-                audio_codec="aac",
-                fps=24,
-                threads=4,
-                logger=None
+            video.write_videofile(
+                output_path, codec="libx264", audio_codec="aac", fps=self.template["fps"], threads=4, logger=None
             )
 
-            final_video.close()
+            video.close()
             self._cleanup()
             return True
 
         except Exception as e:
-            logger.error(f"❌ Render Error: {e}")
+            logger.error(f"❌ Lỗi render video: {e}")
             return False
 
-    # ================== HELPERS ==================
+    # ====================== UTILS ======================
+    def _clean_text(self, text):
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
 
-    def render_image_clip(self, url, description, duration):
+    def _generate_script(self, title, description, price):
+        sentences = re.split(r'[.?!;]\s*', description)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+
+        script = [f"Khám phá ngay: {title}"] if title else []
+
+        feature_map = {
+            'cotton': "Chất liệu cotton mềm mại, thoáng mát!",
+            'form': "Form áo rộng rãi, thoải mái nhưng vẫn đẹp.",
+            'màu': "Đa dạng màu sắc, phối đồ dễ dàng.",
+            'size': "Nhiều size phù hợp cả nam & nữ.",
+        }
+
+        used = 0
+        for s in sentences:
+            s_lower = s.lower()
+            matched = False
+            for k, v in feature_map.items():
+                if k in s_lower:
+                    script.append(v)
+                    matched = True
+                    break
+            if not matched:
+                script.append(s if len(s) < 50 else s[:50] + "...")
+            used += 1
+            if used >= 5:
+                break
+
+        if price and price != "0":
+            script.append(f"Giá chỉ {price}, nhanh tay kẻo hết!")
+        else:
+            script.append("Mua ngay hôm nay để nhận ưu đãi!")
+
+        return script
+
+    def _make_intro(self, text):
+        w, h = self.template["width"], self.template["height"]
+        duration = 2.5
+        img = Image.new("RGB", (w, h), (20, 20, 20))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("fonts/Roboto-Bold.ttf", 60)
+        except:
+            font = ImageFont.load_default()
+        wrapped = "\n".join(textwrap.wrap(text, width=20))
+        bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
+        draw.multiline_text(
+            ((w - (bbox[2]-bbox[0])//2), (h - (bbox[3]-bbox[1])//2)),
+            wrapped, font=font, fill="#FFD700"
+        )
+        path = self._save_temp(img)
+        clip = ImageClip(path, duration=duration).fadein(0.5).fadeout(0.5)
+        return clip.resize(lambda t: 1 + 0.05*t)
+
+    def _make_image_scene(self, url, text, duration, idx):
         try:
             r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
             img = Image.open(BytesIO(r.content)).convert("RGB")
-
-            tw, th = self.template.width, self.template.height
-            canvas = Image.new("RGB", (tw, th), (10, 10, 10))
-
-            img.thumbnail((tw - 60, th - 550), Image.Resampling.LANCZOS)
-            canvas.paste(img, ((tw - img.width) // 2, 150))
-
-            if description:
-                draw = ImageDraw.Draw(canvas)
-                try:
-                    font = ImageFont.truetype("arial.ttf", 38)
-                except:
-                    font = ImageFont.load_default()
-
-                wrapped = "\n".join(textwrap.wrap(description, width=32))
-                bbox = draw.multiline_textbbox((tw // 2, th - 300), wrapped, font=font, anchor="mm")
-                pad = 20
-
-                draw.rectangle(
-                    [bbox[0]-pad, bbox[1]-pad, bbox[2]+pad, bbox[3]+pad],
-                    fill=(0, 0, 0, 180)
-                )
-
-                draw.multiline_text(
-                    (tw // 2, th - 300),
-                    wrapped,
-                    fill="white",
-                    font=font,
-                    anchor="mm",
-                    align="center",
-                    spacing=10
-                )
-
-            path = self._save_temp(canvas)
-            return ImageClip(path, duration=duration).fadein(0.3)
-
         except Exception as e:
-            logger.warning(f"⚠️ Render ảnh lỗi: {e}")
+            logger.warning(f"⚠️ Lỗi tải ảnh: {e}")
             return None
 
-    def create_voiceover(self, text):
+        w, h = self.template["width"], self.template["height"]
+        canvas = Image.new("RGBA", (w, h), (15, 15, 15, 255))
+
+        max_w, max_h = w-100, h-400
+        img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+        canvas.paste(img, ((w-img.width)//2, 100))
+
+        draw = ImageDraw.Draw(canvas)
+        try:
+            font = ImageFont.truetype("fonts/Roboto-Bold.ttf", 40)
+        except:
+            font = ImageFont.load_default()
+
+        lines = textwrap.wrap(text, width=30)[:4]
+        wrapped = "\n".join(lines)
+
+        bbox = draw.multiline_textbbox((w//2, h-180), wrapped, font=font, anchor="mm")
+        pad = 24
+        draw.rectangle((bbox[0]-pad, bbox[1]-pad, bbox[2]+pad, bbox[3]+pad), fill=(0,0,0,190))
+        draw.multiline_text((w//2, h-180), wrapped, font=font, fill="white", anchor="mm", align="center", spacing=10)
+
+        img_path = self._save_temp(canvas.convert("RGB"))
+        clip = ImageClip(img_path, duration=duration)
+
+        motion_type = idx % 5
+        if motion_type == 0:
+            clip = clip.resize(lambda t: 1 + 0.03*t)
+        elif motion_type == 1:
+            clip = clip.resize(lambda t: 1.05 - 0.03*t)
+        elif motion_type == 2:
+            clip = clip.set_position(lambda t: ("center", int(-15*t)))
+        elif motion_type == 3:
+            clip = clip.set_position(lambda t: ("center", int(15*t)))
+        else:
+            clip = clip.set_position(lambda t: (int(-10*t), "center"))
+        return clip.fadein(0.4).fadeout(0.4)
+
+    def _make_cta(self, text):
+        w, h = self.template["width"], self.template["height"]
+        duration = 3.0
+        img = Image.new("RGB", (w, h), (30,30,30))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("fonts/Roboto-Bold.ttf", 50)
+        except:
+            font = ImageFont.load_default()
+        wrapped = "\n".join(textwrap.wrap(text, width=20))
+        bbox = draw.multiline_textbbox((0,0), wrapped, font=font)
+        draw.multiline_text(
+            ((w-(bbox[2]-bbox[0])//2), (h-(bbox[3]-bbox[1])//2)),
+            wrapped, font=font, fill="#FFCC00"
+        )
+        path = self._save_temp(img)
+        clip = ImageClip(path, duration=duration).fadein(0.6).fadeout(0.6)
+        return clip.resize(lambda t: 1 + 0.06*t)
+
+    def _create_tts(self, text):
         try:
             f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
             gTTS(text=text, lang="vi").save(f.name)
             self._temp_files.append(f.name)
             return f.name
-        except:
+        except Exception as e:
+            logger.warning(f"TTS error: {e}")
             return None
-
-    def _text_clip(self, text, size, color, duration):
-        tw, th = self.template.width, self.template.height
-        img = Image.new("RGB", (tw, th), (15, 15, 15))
-        draw = ImageDraw.Draw(img)
-
-        try:
-            font = ImageFont.truetype("arial.ttf", size)
-        except:
-            font = ImageFont.load_default()
-
-        wrapped = "\n".join(textwrap.wrap(text, width=22))
-        draw.multiline_text((tw // 2, th // 2), wrapped, fill=color, font=font, anchor="mm", align="center")
-
-        path = self._save_temp(img)
-        return ImageClip(path, duration=duration).fadein(0.5).fadeout(0.5)
 
     def _save_temp(self, img):
         f = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")

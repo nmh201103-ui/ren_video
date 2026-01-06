@@ -1,10 +1,11 @@
 """
 Video module để render và tạo video
 """
-from .render import VideoRenderer
+from .render import SmartVideoRenderer
 from .templates import VideoTemplate
 
-__all__ = ['VideoRenderer', 'VideoTemplate']
+__all__ = ['SmartVideoRenderer', 'VideoTemplate']
+
 
 
 
