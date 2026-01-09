@@ -21,11 +21,11 @@ class ContentProcessor:
         
         # Xử lý description
         description = product_data.get('description', '')
-        cleaned_desc = self._clean_text(description)
-        
+        cleaned_desc = self._sanitize_description(description)
+
         # Chia description thành các đoạn nhỏ để gắn vào từng ảnh
         image_descriptions = self._split_description_for_images(cleaned_desc, len(image_urls))
-        
+
         # Tạo danh sách image_data chuẩn cho Renderer
         image_data = []
         for i, img_url in enumerate(image_urls):
@@ -43,11 +43,38 @@ class ContentProcessor:
             'price': price,
             'image_urls': image_urls,
             'image_data': image_data,
+            'description': cleaned_desc,
             'short_description': short_description,
             'cta_text': cta_text,
             'original_url': product_data.get('original_url', ''),
             'platform': product_data.get('platform', 'shopee')
         }
+
+    def _sanitize_description(self, text: str) -> str:
+        """Loại bỏ các block kỹ thuật, hướng dẫn, hashtags và các phần không phù hợp cho script marketing."""
+        if not text:
+            return ''
+        # Normalize whitespace
+        text = text.replace('\r', '\n')
+        # Split into paragraphs by double newlines or single newlines
+        paras = [p.strip() for p in text.split('\n\n') if p.strip()]
+        keep = []
+        for p in paras:
+            up = p.upper()
+            # Drop paragraphs that look like specs, headings, guides, policies or hashtags
+            if any(k in up for k in ("THÔNG TIN SẢN PHẨM", "HƯỚNG DẪN", "CAM KẾT", "QUY ĐỊNH", "TRƯỜNG HỢP", "LƯU Ý")):
+                continue
+            if p.strip().startswith('*'):
+                continue
+            if '#' in p and len(p) < 120:
+                # likely a set of hashtags
+                continue
+            # drop very long spec-like paragraphs containing many colons or 'Tên sản phẩm'
+            if ('TÊN SẢN PHẨM' in up or 'KÍCH THƯỚC' in up or 'MÀU SẮC' in up) and len(p) > 60:
+                continue
+            # keep marketing-like short paragraphs
+            keep.append(' '.join(p.split()))
+        return '\n'.join(keep)[:2000]
     
     def _clean_title(self, title: str) -> str:
         title = re.sub(r'<[^>]+>', '', title)

@@ -67,12 +67,10 @@ class ShopeeScraper(BaseScraper):
                 clean_desc = description.replace("MÔ TẢ SẢN PHẨM", "").strip()
 
                 # --- LOG KIỂM TRA ---
-                print("\n" + "🚀" * 15)
-                print(f"[SCRAPER COMPLETED]")
-                print(f"Title: {title[:60]}...")
-                print(f"Ảnh: {len(images)} tấm")
-                print(f"Mô tả thu được: {len(clean_desc)} ký tự")
-                print("🚀" * 15 + "\n")
+                logger.info('[SCRAPER COMPLETED]')
+                logger.info('Title: %s', title[:60])
+                logger.info('Images: %d', len(images))
+                logger.info('Description length: %d chars', len(clean_desc))
 
                 return {
                     "title": title,
@@ -105,21 +103,30 @@ class ShopeeScraper(BaseScraper):
 
                 for (let sel of specificSelectors) {
                     const el = document.querySelector(sel);
-                    // Nếu tìm thấy và nó chứa tiêu đề "Mô tả sản phẩm"
-                    if (el && el.innerText.includes("MÔ TẢ SẢN PHẨM")) {
-                        // Loại bỏ các phần thừa nếu lỡ quét dính (như Đánh giá) bằng cách cắt chuỗi
-                        let content = el.innerText.split("ĐÁNH GIÁ SẢN PHẨM")[0];
-                        return content.trim();
+                    if (el) {
+                        const txt = el.innerText || '';
+                        const up = txt.toUpperCase();
+                        // Tìm các biến thể: "MÔ TẢ", "MÔ TẢ SẢN PHẨM" hoặc "PRODUCT DESCRIPTION"
+                        if (up.includes("MÔ TẢ") || up.includes("PRODUCT DESCRIPTION")) {
+                            // Loại bỏ phần đánh giá nếu có
+                            let content = txt.split(/ĐÁNH GIÁ SẢN PHẨM/i)[0];
+                            return content.trim();
+                        }
                     }
                 }
 
-                // 2. Nếu không tìm thấy bằng class, tìm dựa trên tiêu đề văn bản "MÔ TẢ SẢN PHẨM"
-                const allElements = document.querySelectorAll('h2, div, section');
+                // 2. Nếu không tìm thấy bằng class, tìm dựa trên tiêu đề văn bản (case-insensitive)
+                const allElements = document.querySelectorAll('h2, div, section, span');
                 for (let el of allElements) {
-                    if (el.innerText === "MÔ TẢ SẢN PHẨM" || el.innerText === "Product Description") {
-                        // Lấy phần tử tiếp theo ngay sau tiêu đề này (thường là nội dung mô tả)
+                    const txt = (el.innerText || '').trim();
+                    const up = txt.toUpperCase();
+                    if (up === "MÔ TẢ SẢN PHẨM" || up === "PRODUCT DESCRIPTION" || up.includes('MÔ TẢ')) {
                         const nextEl = el.nextElementSibling || el.parentElement;
-                        if (nextEl) return nextEl.innerText.split("ĐÁNH GIÁ SẢN PHẨM")[0].trim();
+                        if (nextEl) {
+                            let content = nextEl.innerText || '';
+                            content = content.split(/ĐÁNH GIÁ SẢN PHẨM/i)[0].trim();
+                            if (content) return content;
+                        }
                     }
                 }
                 return "";
@@ -128,32 +135,40 @@ class ShopeeScraper(BaseScraper):
             return ""
 
     def _get_fallback_description(self, page) -> str:
-        """Hàm dự phòng nhưng có giới hạn phạm vi để tránh lấy 6000+ ký tự rác"""
+        """Hàm dự phòng nhưng có giới hạn phạm vi để tránh lấy 6000+ ký tự rác
+        Tách phần logic phức tạp để dễ unit-test bằng Python.
+        """
         try:
-            return page.evaluate("""() => {
-                const bodyText = document.body.innerText;
-                const startKeyword = "MÔ TẢ SẢN PHẨM";
-                const endKeyword = "ĐÁNH GIÁ SẢN PHẨM";
-                
-                const startIndex = bodyText.indexOf(startKeyword);
-                if (startIndex !== -1) {
-                    let endIndex = bodyText.indexOf(endKeyword, startIndex);
-                    
-                    // Nếu không tìm thấy từ khóa kết thúc, chỉ lấy tối đa 1500 ký tự từ điểm bắt đầu
-                    if (endIndex === -1 || (endIndex - startIndex) > 2500) {
-                        endIndex = startIndex + 2000;
-                    }
-                    
-                    let result = bodyText.substring(startIndex, endIndex);
-                    // Loại bỏ dòng tiêu đề "MÔ TẢ SẢN PHẨM" ở đầu
-                    return result.replace(startKeyword, "").trim();
-                }
-                
-                // Cuối cùng mới dùng Meta Description (thường chỉ ~150-200 ký tự sạch)
-                return document.querySelector('meta[name="description"]')?.content || "";
-            }""")
-        except:
+            # Lấy toàn bộ text của body từ trang
+            body_text = page.evaluate("() => document.body.innerText") or ""
+            desc = self._extract_description_from_body_text(body_text)
+            if desc:
+                return desc
+            # Nếu không có, thử meta description
+            meta = page.evaluate("() => document.querySelector('meta[name=\"description\"]')?.content")
+            return meta or ""
+        except Exception:
             return ""
+
+    def _extract_description_from_body_text(self, body_text: str) -> str:
+        """Tách và trả về đoạn mô tả từ body text (case-insensitive)."""
+        if not body_text:
+            return ""
+        body_up = body_text.upper()
+        start_idx = body_up.find('MÔ TẢ')
+        if start_idx == -1:
+            start_idx = body_up.find('PRODUCT DESCRIPTION')
+        if start_idx != -1:
+            end_idx = body_up.find('ĐÁNH GIÁ SẢN PHẨM', start_idx)
+            if end_idx == -1 or (end_idx - start_idx) > 2500:
+                end_idx = start_idx + 2000
+            result = body_text[start_idx:end_idx]
+            # Loại bỏ các tiêu đề như 'MÔ TẢ SẢN PHẨM', 'MÔ TẢ' hoặc 'PRODUCT DESCRIPTION'
+            result = re.sub(r"MÔ TẢ SẢN PHẨM", "", result, flags=re.IGNORECASE)
+            result = re.sub(r"MÔ TẢ", "", result, flags=re.IGNORECASE)
+            result = re.sub(r"PRODUCT DESCRIPTION", "", result, flags=re.IGNORECASE)
+            return result.strip()
+        return ""
 
     def _get_title(self, page) -> str:
         try:

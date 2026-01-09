@@ -87,14 +87,22 @@ class VideoCreatorApp:
             if not product_data or not product_data.get("description"):
                 raise ValueError("Scrape không có mô tả")
 
-            # Hiển thị thumbnail sản phẩm
-            img_url = product_data.get("image_urls", [None])[0]
+            # Hiển thị thumbnail sản phẩm (safe access)
+            image_urls = product_data.get("image_urls") or []
+            logger.info("Product has %d images", len(image_urls))
+            img_url = image_urls[0] if image_urls else None
             if img_url:
                 self._show_thumbnail(img_url)
+            else:
+                logger.debug("No thumbnail to show for this product")
 
             self._ui("📝 Đang xử lý nội dung...")
             processor = ContentProcessor()
             processed = processor.process(product_data)
+            if not processed:
+                logger.error("Processor returned None (processing failed) for product_data: %s", product_data)
+                raise RuntimeError("Processor failed to process product data")
+
             if not processed.get("description"):
                 logger.warning("⚠️ Processor làm rỗng mô tả → dùng lại mô tả gốc")
                 processed["description"] = product_data["description"]
@@ -114,7 +122,7 @@ class VideoCreatorApp:
             messagebox.showinfo("Thành công", f"Video đã tạo:\n{output_file}")
 
         except Exception as e:
-            logger.error(e)
+            logger.exception("Error in _create_video_worker: %s", e)
             messagebox.showerror("Lỗi", str(e))
         finally:
             self.progress.stop()

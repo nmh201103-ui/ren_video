@@ -18,3 +18,8 @@ proglog>=0.1.10
 # Support for Python 3.12+ 
 setuptools>=75.0.0
 python-dotenv
+
+# Optional AI / Motion
+elevenlabs
+scipy
+requests
