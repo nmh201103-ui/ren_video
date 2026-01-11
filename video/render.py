@@ -2,16 +2,19 @@ import os
 import tempfile
 import textwrap
 from io import BytesIO
+import random
+import math
 
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy.editor import (
-    ImageClip,
+    VideoFileClip,
     AudioFileClip,
-    CompositeAudioClip,
+    ImageClip,
     CompositeVideoClip,
+    CompositeAudioClip,
+    vfx,
 )
-import moviepy.video.fx.all as vfx
 
 from utils.logger import get_logger
 from video.ai_providers import (
@@ -30,10 +33,13 @@ if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
 
 class SmartVideoRenderer:
 
-    def __init__(self, template=None):
+    def __init__(self, template=None, video_mode="reviewer"):
         self.template = template or {"width": 720, "height": 1280, "fps": 24}
         self.temp_files = []
         self.tts = GTTSProvider()
+        self.video_mode = video_mode  # "simple", "reviewer", "demo"
+        self.person_image_path = None  # For demo mode
+        self.reviewer_avatar = None  # Cache reviewer avatar
         
         # Initialize script generator based on env
         provider = os.getenv("LLM_PROVIDER", "default").lower()
@@ -64,24 +70,40 @@ class SmartVideoRenderer:
     # MAIN
     # =========================
 
-    def render(self, data: dict, output_path: str, max_images=5):
+    def render(self, data: dict, output_path: str, max_images=5, progress_callback=None):
         title = data.get("title", "")
         desc = data.get("description", "")
         price = data.get("price", "")
         images = data.get("image_urls", [])[:max_images]
 
         logger.info("🎤 Render video: %s", title)
+        logger.info("📸 Images available: %d", len(images))
+        if not images:
+            logger.warning("⚠️ No images! Will use text slides instead")
+        
+        if progress_callback:
+            progress_callback("Generating script...", 10)
+
+        # Capture optional person image for demo mode
+        self.person_image_path = data.get("person_image_path")
 
         # Use AI to generate script instead of hardcoded rules
         script = self.script_gen.generate(title, desc, price)
 
         logger.info("📝 Script story: %s", script)
+        
+        if progress_callback:
+            progress_callback(f"Creating {len(script)} scenes...", 20)
 
         clips, audios = [], []
         t = 0
 
         try:
             for idx, text in enumerate(script):
+                if progress_callback:
+                    progress = 20 + (idx + 1) * 60 // len(script)
+                    progress_callback(f"Scene {idx+1}/{len(script)}: {text[:50]}...", progress)
+                    
                 img = images[idx % len(images)] if images else None
 
                 # generate audio first to decide scene duration
@@ -108,6 +130,9 @@ class SmartVideoRenderer:
 
             if audios:
                 video.audio = CompositeAudioClip(audios)
+            
+            if progress_callback:
+                progress_callback("Encoding video...", 85)
 
             video.write_videofile(
                 output_path,
@@ -117,6 +142,9 @@ class SmartVideoRenderer:
                 logger=None,
                 preset="medium"
             )
+            
+            if progress_callback:
+                progress_callback("Video complete!", 100)
 
         except Exception as e:
             logger.exception("Render failed: %s", e)
@@ -131,16 +159,21 @@ class SmartVideoRenderer:
     # =========================
 
     def make_premium_scene(self, img_url, text, duration=4.0, scene_idx=0):
-        """Create premium animated scene with blur overlay and smooth motion like veo3/sora."""
+        """Create simple scene with image. Audio only, no text overlay."""
         img = self.load_image(img_url) or self.text_image(text)
         w, h = self.template["width"], self.template["height"]
+        
+        # DEMO MODE: Create person holding product for all scenes
+        if self.video_mode == "demo":
+            img = self.get_person_holding_image(img)
+            logger.info(f"🤝 Applied DEMO MODE: person holding product in scene {scene_idx}")
 
         # Create blur background fill
         bg_img = img.copy().resize((w, h), Image.LANCZOS)
         bg_img = bg_img.filter(ImageFilter.GaussianBlur(radius=20))
         
-        # Add dark overlay for better text contrast
-        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 120))
+        # Add overlay
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 80))
         bg_img = Image.alpha_composite(bg_img.convert("RGBA"), overlay).convert("RGB")
         
         # Main product image (centered, aspect preserved)
@@ -156,95 +189,17 @@ class SmartVideoRenderer:
         
         # Paste product on background
         x = (w - new_w) // 2
-        y = (h - new_h) // 2 - 100  # Slightly up
+        y = (h - new_h) // 2
         bg_img.paste(img_resized, (x, y))
         
-        # Add gradient text box at bottom
-        text_img = self._create_text_overlay(text, w, scene_idx)
-        text_h = text_img.height
-        bg_img.paste(text_img, (0, h - text_h), text_img.convert("RGBA"))
-        
-        # Save and create clip
+        # Save and create clip - STATIC IMAGE (no text, no zoom)
         img_path = self.save_temp(bg_img)
         clip = ImageClip(img_path).set_duration(duration)
         
-        # Premium motion effects based on scene
-        if scene_idx == 0:  # Hook scene - dramatic zoom
-            clip = clip.resize(lambda t: 1.15 - 0.1 * (t / duration))
-        elif scene_idx == 1:  # Solution - gentle pan right
-            clip = clip.set_position(lambda t: (int(-30 + 50 * (t / duration)), 'center'))
-        elif scene_idx == 2:  # Benefit - slow zoom in
-            clip = clip.resize(lambda t: 1 + 0.05 * (t / duration))
-        else:  # CTA - pulse effect
-            clip = clip.resize(lambda t: 1 + 0.02 * abs(t - duration/2) / (duration/2))
-            
-        # Smooth fade transitions
+        # Only fade in/out - no zoom, no pan, no motion
         clip = clip.fx(vfx.fadein, 0.3).fx(vfx.fadeout, 0.3)
         
         return clip
-
-    def _create_text_overlay(self, text, width, scene_idx):
-        """Create stylized text overlay with gradient background."""
-        # Gradient colors by scene type
-        colors = [
-            (255, 87, 87, 200),   # Red for hook
-            (74, 144, 226, 200),  # Blue for solution  
-            (104, 201, 176, 200), # Green for benefit
-            (255, 193, 7, 220)    # Yellow for CTA
-        ]
-        
-        color = colors[scene_idx % len(colors)]
-        height = 200
-        
-        # Create gradient background
-        gradient = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        for i in range(height):
-            alpha = int(color[3] * (1 - i / height * 0.6))
-            line_color = (*color[:3], alpha)
-            gradient.paste(line_color, (0, i, width, i+1))
-        
-        draw = ImageDraw.Draw(gradient)
-        
-        # Load font
-        try:
-            font = ImageFont.truetype("arial.ttf", 42)
-        except:
-            try:
-                font = ImageFont.truetype("fonts/Roboto-Bold.ttf", 42) 
-            except:
-                font = ImageFont.load_default()
-        
-        # Word wrap and center text
-        words = text.split()
-        lines = []
-        current_line = ""
-        
-        for word in words:
-            test_line = current_line + " " + word if current_line else word
-            if draw.textbbox((0, 0), test_line, font=font)[2] < width - 60:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-                
-        if current_line:
-            lines.append(current_line)
-        
-        # Draw text centered
-        y_offset = (height - len(lines) * 50) // 2
-        for i, line in enumerate(lines):
-            bbox = draw.textbbox((0, 0), line, font=font)
-            text_width = bbox[2] - bbox[0]
-            x = (width - text_width) // 2
-            y = y_offset + i * 50
-            
-            # Text shadow
-            draw.text((x+2, y+2), line, font=font, fill=(0, 0, 0, 180))
-            # Main text
-            draw.text((x, y), line, font=font, fill="white")
-            
-        return gradient
 
     # =========================
     # IMAGE

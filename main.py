@@ -1,5 +1,10 @@
 import sys
 import os
+import io
+
+# Fix UTF-8 encoding for Windows
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # Ép Python tìm kiếm module từ thư mục gốc
 current_dir = os.path.dirname(os.path.abspath(__file__))

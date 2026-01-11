@@ -74,6 +74,11 @@ class OpenAIScriptGenerator(ScriptGenerator):
 class OllamaScriptGenerator(ScriptGenerator):
     def __init__(self, model: str = "gemma3:4b"):
         self.model = model
+        # Allow longer/shorter timeouts via env to avoid frequent 60s kills
+        try:
+            self.timeout = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+        except ValueError:
+            self.timeout = 60
 
     def _run_cli(self, prompt: str) -> str:
         try:
@@ -82,9 +87,12 @@ class OllamaScriptGenerator(ScriptGenerator):
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                timeout=60
+                timeout=self.timeout
             )
             return result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            logger.error(f"Ollama timed out after {self.timeout}s")
+            return ""
         except Exception as e:
             logger.error(f"Ollama error: {e}")
             return ""

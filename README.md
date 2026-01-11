@@ -1,4 +1,40 @@
+# Affiliate Video Creator
+
+## Quick Start
+
+### 1. Setup Chrome với Remote Debugging
+
+```powershell
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="E:\chrome_profile_affiliate"
+```
+
+### 2. Setup Python Environment (Python 3.11 recommended)
+
+```powershell
+# Tạo virtual environment với Python 3.11
+python -m venv .venv
+
+# Activate venv (QUAN TRỌNG!)
+.\.venv\Scripts\Activate.ps1
+
+# Cài dependencies
+pip install -r requirements.txt
+
+# Cài Playwright browsers
+playwright install chromium
+```
+
+### 3. Run Application
+
+```powershell
+# Sau khi activate venv
+python main.py
+
+# Hoặc dùng trực tiếp (không cần activate)
+.\.venv\Scripts\python.exe main.py
+```
+
+**Lưu ý:** Luôn đảm bảo venv được activate (thấy `(.venv)` ở đầu prompt) trước khi chạy để tránh thiếu thư viện!
 
 
 ## AI Providers & Configuration
