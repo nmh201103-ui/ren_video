@@ -16,8 +16,8 @@ class VideoCreatorApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("🎬 Affiliate Video Creator Pro")
-        self.root.geometry("1000x850")
-        self.root.resizable(False, False)
+        self.root.geometry("1200x950")
+        self.root.resizable(True, True)
         self.root.configure(bg="#f0f2f5")
 
         self.is_processing = False
@@ -25,7 +25,7 @@ class VideoCreatorApp:
         self.status_text = tk.StringVar(value="Sẵn sàng tạo video 🎥")
         self.progress_percent = tk.IntVar(value=0)
         self.thumbnail_img = None
-        self.video_mode = tk.StringVar(value="reviewer")  # NEW: video mode
+        self.video_mode = tk.StringVar(value="simple")  # video mode: simple or demo
 
         self._setup_style()
         self._setup_ui()
@@ -92,9 +92,9 @@ class VideoCreatorApp:
         
         # Radio buttons for video modes
         modes = [
-            ("simple", "📹 Video Đơn Giản", "Chỉ sản phẩm + text", "#e3f2fd"),
-            ("reviewer", "👤 Video Reviewer", "Có người review + avatar góc màn hình", "#f3e5f5"),
-            ("demo", "🤝 Video Demo", "Người thật cầm sản phẩm review (WOW!)", "#fff3e0")
+            ("simple", "📹 Video Đơn Giản", "Sản phẩm + giọng đọc", "#e3f2fd"),
+            ("demo", "🤝 Video Demo", "Người cầm sản phẩm + giọng đọc", "#fff3e0"),
+            ("reviewer", "🎙️ Video Reviewer", "Người review + sản phẩm (cần bật AI Avatar)", "#f3e5f5")
         ]
         
         self.mode_frames = {}  # Store frames for highlighting
@@ -120,7 +120,59 @@ class VideoCreatorApp:
         picker_frame = tk.Frame(content_inner, bg="#ffffff")
         picker_frame.pack(fill=tk.X, pady=(0, 10))
         
-        self.pick_person_btn = tk.Button(picker_frame, text="👤 Chọn ảnh người (chỉ Demo)",
+        # AI Avatar toggle (checkbox)
+        self.use_ai_avatar = tk.BooleanVar(value=False)
+        ai_frame = tk.Frame(content_inner, bg="#ffffff", relief=tk.GROOVE, bd=2)
+        ai_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        ai_check = tk.Checkbutton(
+            ai_frame, 
+            text="🤖 Sử dụng AI Avatar (Talking Head - D-ID)", 
+            variable=self.use_ai_avatar,
+            font=("Segoe UI", 10, "bold"),
+            bg="#ffffff",
+            activebackground="#e8f5e9",
+            selectcolor="#4CAF50"
+        )
+        ai_check.pack(anchor="w", padx=10, pady=10)
+        
+        # Avatar backend selector (Colab free vs D-ID paid)
+        backend_frame = tk.Frame(ai_frame, bg="#ffffff")
+        backend_frame.pack(anchor="w", padx=30, pady=(0, 10))
+        
+        self.avatar_backend = tk.StringVar(value="colab")
+        
+        colab_rb = tk.Radiobutton(
+            backend_frame,
+            text="🆓 Colab (Miễn phí - cần setup)",
+            variable=self.avatar_backend,
+            value="colab",
+            font=("Segoe UI", 9),
+            bg="#ffffff"
+        )
+        colab_rb.pack(anchor="w")
+        
+        did_rb = tk.Radiobutton(
+            backend_frame,
+            text="💳 D-ID API (Trả phí - dễ dùng)",
+            variable=self.avatar_backend,
+            value="did",
+            font=("Segoe UI", 9),
+            bg="#ffffff"
+        )
+        did_rb.pack(anchor="w")
+        
+        ai_note = tk.Label(
+            ai_frame, 
+            text="ℹ️ Colab: Upload notebook lên colab.research.google.com, chạy cell 5, copy URL ngrok\n   D-ID: Set DID_API_KEY env variable. Free trial: 20 videos",
+            font=("Segoe UI", 8),
+            fg="#666",
+            bg="#ffffff",
+            justify="left"
+        )
+        ai_note.pack(anchor="w", padx=30, pady=(0, 10))
+        
+        self.pick_person_btn = tk.Button(picker_frame, text="👤 Chọn ảnh người (Demo + Reviewer)",
                                         font=("Segoe UI", 10), bg="#eeeeee", fg="#333",
                                         relief=tk.RAISED, bd=2,
                                         command=self._pick_person_image, cursor="hand2")
@@ -207,7 +259,7 @@ class VideoCreatorApp:
         self.log_text.config(state=tk.DISABLED)
         
         # Set initial mode highlight
-        self.root.after(100, lambda: self._on_mode_change("reviewer", "#f3e5f5"))
+        self.root.after(100, lambda: self._on_mode_change("simple", "#e3f2fd"))
 
     # ================= CORE =================
     def _on_create_video(self):
@@ -219,6 +271,36 @@ class VideoCreatorApp:
         if not urls:
             messagebox.showerror("Lỗi", "Chưa nhập link")
             return
+        
+        # Check if AI Avatar is enabled but not configured
+        if self.use_ai_avatar.get():
+            avatar_backend = self.avatar_backend.get()
+            if avatar_backend == "colab":
+                colab_url = os.getenv("COLAB_API_URL")
+                if not colab_url:
+                    messagebox.showerror(
+                        "⚠️ Colab API chưa setup",
+                        "Hướng dẫn setup Colab:\n\n"
+                        "1. Mở file: SadTalker_Colab_Free.ipynb\n"
+                        "2. Upload lên Google Colab\n"
+                        "3. Chạy Cell 5 (API Server)\n"
+                        "4. Copy URL ngrok từ output\n"
+                        "5. Chạy lệnh (thay URL):\n"
+                        "   $env:COLAB_API_URL='https://denny-pseudospiritual-stomachically.ngrok-free.dev'\n\n"
+                        "Hoặc tắt AI Avatar nếu chỉ muốn dùng ảnh tĩnh"
+                    )
+                    return
+            elif avatar_backend == "did":
+                did_api_key = os.getenv("DID_API_KEY")
+                if not did_api_key:
+                    messagebox.showerror(
+                        "⚠️ D-ID API chưa setup",
+                        "Set DID_API_KEY environment variable:\n\n"
+                        "$env:DID_API_KEY='your-api-key-here'\n\n"
+                        "Hoặc đăng ký free trial tại:\n"
+                        "https://www.d-id.com"
+                    )
+                    return
 
         self.is_processing = True
         self.progress_percent.set(0)
@@ -270,20 +352,30 @@ class VideoCreatorApp:
 
             self._ui("🎬 Đang render video...", 0)
             video_mode = self.video_mode.get()
+            use_ai_avatar = self.use_ai_avatar.get()
+            avatar_backend = self.avatar_backend.get()
             
-            # Đính kèm ảnh người (nếu có) cho chế độ Demo
+            # Đính kèm ảnh người (nếu có) cho chế độ Demo/AI Avatar
             processed["person_image_path"] = self.person_image_path
             
             # Show mode in status
             mode_names = {
                 "simple": "Video Đơn Giản",
-                "reviewer": "Video Reviewer (có avatar)", 
-                "demo": "Video Demo (người cầm sản phẩm)"
+                "demo": "Video Demo (người cầm sản phẩm)",
+                "reviewer": "Video Reviewer (người nói)"
             }
-            self._ui(f"🎬 Render {mode_names.get(video_mode, video_mode)}...", 0)
+            mode_text = mode_names.get(video_mode, video_mode)
+            if use_ai_avatar:
+                backend_emoji = "🆓" if avatar_backend == "colab" else "💳"
+                mode_text += f" + AI Avatar {backend_emoji}"
+            self._ui(f"🎬 Render {mode_text}...", 0)
             
-            renderer = SmartVideoRenderer(video_mode=video_mode)
-            logger.info(f"Using video mode: {video_mode}")
+            renderer = SmartVideoRenderer(
+                video_mode=video_mode, 
+                use_ai_avatar=use_ai_avatar,
+                avatar_backend=avatar_backend
+            )
+            logger.info(f"Using video mode: {video_mode}, AI Avatar: {use_ai_avatar}, Backend: {avatar_backend}")
             output_file = f"output/videos/video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             
             # Render with progress callback
@@ -309,7 +401,7 @@ class VideoCreatorApp:
         # Persist selected mode
         self.video_mode.set(mode)
         # Enable/disable person picker based on mode
-        if mode == "demo":
+        if mode in ("demo", "reviewer"):  # Both demo and reviewer need person image
             self.pick_person_btn.config(state=tk.NORMAL)
             self.person_label.config(text=self.person_label.cget("text"))
         else:
@@ -327,7 +419,6 @@ class VideoCreatorApp:
         # Update status
         mode_names = {
             "simple": "Video Đơn Giản",
-            "reviewer": "Video Reviewer",
             "demo": "Video Demo"
         }
         self.status_text.set(f"✅ Đã chọn: {mode_names.get(mode, mode)}")

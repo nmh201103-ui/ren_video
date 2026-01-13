@@ -7,12 +7,12 @@ from typing import List, Tuple
 
 @dataclass
 class VideoTemplate:
-    """Template cho video"""
+    """Template cho video - HIGH QUALITY SETTINGS"""
     name: str
-    width: int = 1080
+    width: int = 1080  # Full HD 1080p
     height: int = 1920  # Vertical format cho TikTok/Shorts
     duration: float = 15.0  # Giây
-    fps: int = 30
+    fps: int = 30  # 30fps cho smooth playback (chuẩn TikTok/YouTube)
     
     # Timing cho các elements
     title_duration: float = 3.0

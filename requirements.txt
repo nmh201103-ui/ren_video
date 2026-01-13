@@ -28,3 +28,6 @@ elevenlabs
 scipy
 gtts>=2.5.0
 requests
+
+# AI Avatar (D-ID API)
+# No additional packages needed - uses requests which is already listed

@@ -32,9 +32,10 @@ class ShopeeScraper(BaseScraper):
                 # Đợi trang ổn định một chút
                 page.wait_for_timeout(3000) 
 
-                # 1. Lấy Title và Ảnh
+                # 1. Lấy Title, Ảnh và Giá
                 title = self._get_title(page)
                 images = self._get_images_advanced(page)
+                price = self._get_price(page)
 
                 # 2. CHIẾN THUẬT QUÉT MÔ TẢ TRIỆT ĐỂ
                 description = ""
@@ -70,6 +71,7 @@ class ShopeeScraper(BaseScraper):
                 logger.info('[SCRAPER COMPLETED]')
                 logger.info('Title: %s', title[:60])
                 logger.info('Images: %d', len(images))
+                logger.info('Price: %s', price)
                 logger.info('Description length: %d chars', len(clean_desc))
 
                 return {
@@ -77,6 +79,7 @@ class ShopeeScraper(BaseScraper):
                     "image_urls": images,
                     "description": clean_desc,
                     "short_description": clean_desc,
+                    "price": price,
                     "platform": "shopee",
                     "original_url": url
                 }
@@ -204,6 +207,52 @@ class ShopeeScraper(BaseScraper):
             "image_urls": [],
             "description": "",
             "short_description": "",
+            "price": "0",
             "platform": "shopee",
             "original_url": url
         }
+
+    def _get_price(self, page) -> str:
+        """Lấy giá sản phẩm từ Shopee"""
+        try:
+            price = page.evaluate("""() => {
+                // Các selector phổ biến cho giá trên Shopee
+                const priceSelectors = [
+                    '.product-price__current-price',           // Giá hiện tại
+                    'span.shopee-price__current',              // Class cũ
+                    '[data-testid="product-price"]',           
+                    'div._3I7_6e',                             // Class Shopee 2024-2025
+                    'div.shopee-product-rating',              
+                    '.product-price'
+                ];
+                
+                for (let sel of priceSelectors) {
+                    const el = document.querySelector(sel);
+                    if (el) {
+                        let text = el.innerText?.trim() || '';
+                        // Lấy con số từ text (loại bỏ ₫, dấu phẩy, khoảng trắng)
+                        const nums = text.match(/\d+[\d.,]*\d*/);
+                        if (nums) {
+                            return nums[0].replace(/[.,]/g, '');  // '123.456' -> '123456'
+                        }
+                    }
+                }
+                
+                // Fallback: tìm số lớn nhất trên trang (thường là giá)
+                const bodyText = document.body.innerText;
+                const pricePattern = /₫\s*[\d.,]+/g;
+                const matches = bodyText.match(pricePattern);
+                if (matches && matches.length > 0) {
+                    let price = matches[0].replace(/[₫\s.,]/g, '');
+                    // Lọc để chỉ lấy giá hợp lý (1000-999999999)
+                    if (price.length >= 4 && price.length <= 9) {
+                        return price;
+                    }
+                }
+                
+                return '0';
+            }""")
+            return price or '0'
+        except Exception as e:
+            logger.debug(f"⚠️ Failed to get price: {e}")
+            return '0'
