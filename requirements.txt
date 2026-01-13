@@ -25,9 +25,11 @@ python-dotenv
 
 # Optional AI / Motion
 elevenlabs
-scipy
+scipy>=1.10.0  # For image filtering in scraper
 gtts>=2.5.0
 requests
 
-# AI Avatar (D-ID API)
-# No additional packages needed - uses requests which is already listed
+# AI Avatar backends
+torch>=2.0.0  # For Wav2Lip (optional - install with: pip install torch torchvision)
+# D-ID API: No additional packages needed - uses requests which is already listed
+# Colab SadTalker: Uses requests for API calls

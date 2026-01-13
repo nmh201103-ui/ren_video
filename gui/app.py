@@ -15,458 +15,456 @@ logger = get_logger()
 class VideoCreatorApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎬 Affiliate Video Creator Pro")
-        self.root.geometry("1200x950")
+        self.root.title("🎬 Video Creator Pro")
+        self.root.geometry("1300x800")
         self.root.resizable(True, True)
-        self.root.configure(bg="#f0f2f5")
+        self.root.configure(bg="#1a1d29")
 
         self.is_processing = False
         self.video_path = None
-        self.status_text = tk.StringVar(value="Sẵn sàng tạo video 🎥")
+        self.status_text = tk.StringVar(value="Ready 🚀")
         self.progress_percent = tk.IntVar(value=0)
         self.thumbnail_img = None
-        self.video_mode = tk.StringVar(value="simple")  # video mode: simple or demo
-
-        self._setup_style()
+        self.video_mode = tk.StringVar(value="reviewer")
+        self.person_image_path = None
+        
         self._setup_ui()
         ensure_directory("output/videos")
 
-    # ================= STYLE =================
-    def _setup_style(self):
-        style = ttk.Style(self.root)
-        
-        # Modern button style
-        style.configure("TButton", font=("Segoe UI", 11, "bold"), padding=10)
-        style.configure("Primary.TButton", foreground="white", background="#0066CC")
-        
-        # Labels
-        style.configure("TLabel", font=("Segoe UI", 11), background="#f0f2f5")
-        style.configure("Header.TLabel", font=("Segoe UI", 22, "bold"), 
-                       foreground="#1a1a1a", background="#f0f2f5")
-        style.configure("Status.TLabel", foreground="#0066CC", background="#f0f2f5")
-        
-        # Radio buttons
-        style.configure("TRadiobutton", font=("Segoe UI", 10), background="#ffffff")
-        
-        # Progress bar
-        style.configure("TProgressbar", thickness=25, troughcolor="#e0e0e0", 
-                       background="#0066CC")
-
-    # ================= UI =================
     def _setup_ui(self):
-        # Main container with padding
-        main_frame = tk.Frame(self.root, bg="#f0f2f5")
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # Main container
+        main = tk.Frame(self.root, bg="#1a1d29")
+        main.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # Header
-        header_frame = tk.Frame(main_frame, bg="#ffffff", relief=tk.RAISED, bd=2)
-        header_frame.pack(fill=tk.X, pady=(0, 20))
+        header = tk.Frame(main, bg="#252836", height=80)
+        header.pack(fill=tk.X, pady=(0, 15))
+        header.pack_propagate(False)
         
-        ttk.Label(header_frame, text="🎬 Affiliate Video Creator Pro", 
-                 style="Header.TLabel").pack(pady=15)
+        tk.Label(header,
+                text="🎬 Video Creator Pro",
+                font=("Segoe UI", 22, "bold"),
+                fg="#6c63ff",
+                bg="#252836").pack(side=tk.LEFT, padx=25, pady=20)
         
-        # Content frame
-        content_frame = tk.Frame(main_frame, bg="#ffffff", relief=tk.RAISED, bd=2)
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        content_inner = tk.Frame(content_frame, bg="#ffffff")
-        content_inner.pack(fill=tk.BOTH, expand=True, padx=25, pady=20)
+        tk.Label(header,
+                text="TikTok • Shorts • Reels",
+                font=("Segoe UI", 10),
+                fg="#9499a8",
+                bg="#252836").pack(side=tk.LEFT, padx=5)
         
-        # URL Input Section
-        url_section = tk.LabelFrame(content_inner, text="📥 Link Sản Phẩm", 
-                                   font=("Segoe UI", 11, "bold"), bg="#ffffff", 
-                                   fg="#333", relief=tk.GROOVE, bd=2)
-        url_section.pack(fill=tk.X, pady=(0, 15))
+        # Content area
+        content = tk.Frame(main, bg="#1a1d29")
+        content.pack(fill=tk.BOTH, expand=True)
         
-        self.url_text = tk.Text(url_section, height=4, font=("Segoe UI", 10), 
-                               relief=tk.FLAT, bg="#f9f9f9", wrap=tk.WORD)
-        self.url_text.pack(fill=tk.X, padx=10, pady=10)
+        # Left panel
+        left = tk.Frame(content, bg="#252836", width=750)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        left.pack_propagate(False)
         
-        # Video Mode Section - NEW!
-        mode_section = tk.LabelFrame(content_inner, text="🎨 Chế Độ Video", 
-                                    font=("Segoe UI", 11, "bold"), bg="#ffffff", 
-                                    fg="#333", relief=tk.GROOVE, bd=2)
-        mode_section.pack(fill=tk.X, pady=(0, 15))
+        # Right panel
+        right = tk.Frame(content, bg="#252836", width=500)
+        right.pack(side=tk.RIGHT, fill=tk.BOTH)
+        right.pack_propagate(False)
         
-        mode_inner = tk.Frame(mode_section, bg="#ffffff")
-        mode_inner.pack(fill=tk.X, padx=10, pady=10)
+        # === LEFT: SETTINGS ===
+        settings_scroll = tk.Canvas(left, bg="#252836", highlightthickness=0)
+        settings_scroll.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Radio buttons for video modes
-        modes = [
-            ("simple", "📹 Video Đơn Giản", "Sản phẩm + giọng đọc", "#e3f2fd"),
-            ("demo", "🤝 Video Demo", "Người cầm sản phẩm + giọng đọc", "#fff3e0"),
-            ("reviewer", "🎙️ Video Reviewer", "Người review + sản phẩm (cần bật AI Avatar)", "#f3e5f5")
+        scrollbar = ttk.Scrollbar(left, orient="vertical", command=settings_scroll.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        settings_scroll.configure(yscrollcommand=scrollbar.set)
+        
+        settings_inner = tk.Frame(settings_scroll, bg="#252836")
+        settings_scroll.create_window((0, 0), window=settings_inner, anchor="nw")
+        
+        # Quick Actions
+        self._add_section(settings_inner, "⚡ Quick Presets")
+        quick_frame = tk.Frame(settings_inner, bg="#252836")
+        quick_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
+        
+        presets = [
+            ("📦 Unboxing", "reviewer", True, "#6c63ff"),
+            ("⭐ Review", "reviewer", True, "#ff6584"),
+            ("📹 Simple", "simple", False, "#4CAF50"),
         ]
         
-        self.mode_frames = {}  # Store frames for highlighting
+        for text, mode, avatar, color in presets:
+            btn = tk.Button(quick_frame,
+                          text=text,
+                          font=("Segoe UI", 10, "bold"),
+                          bg=color,
+                          fg="white",
+                          activebackground=color,
+                          relief=tk.FLAT,
+                          cursor="hand2",
+                          command=lambda m=mode, a=avatar: self._apply_preset(m, a))
+            btn.pack(side=tk.LEFT, padx=(0, 10), ipadx=15, ipady=10)
         
-        for idx, (mode_val, title, desc, color) in enumerate(modes):
-            mode_frame = tk.Frame(mode_inner, bg="#f9f9f9", relief=tk.RAISED, bd=2)
-            mode_frame.pack(fill=tk.X, pady=5)
-            self.mode_frames[mode_val] = mode_frame
+        # URL Input
+        self._add_section(settings_inner, "🔗 Product URL")
+        url_frame = tk.Frame(settings_inner, bg="#252836")
+        url_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
+        
+        self.url_text = tk.Text(url_frame,
+                               height=3,
+                               font=("Segoe UI", 10),
+                               bg="#1a1d29",
+                               fg="#e4e6eb",
+                               insertbackground="#6c63ff",
+                               relief=tk.FLAT,
+                               wrap=tk.WORD)
+        self.url_text.pack(fill=tk.X, ipady=5)
+        
+        # Video Style
+        self._add_section(settings_inner, "🎨 Video Style")
+        style_frame = tk.Frame(settings_inner, bg="#252836")
+        style_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
+        
+        styles = [
+            ("📹 Simple", "simple", "Product + voiceover"),
+            ("🎙️ Reviewer", "reviewer", "Talking head + product"),
+        ]
+        
+        for text, value, desc in styles:
+            radio_frame = tk.Frame(style_frame, bg="#1a1d29")
+            radio_frame.pack(fill=tk.X, pady=5)
             
-            rb = tk.Radiobutton(mode_frame, text=title, variable=self.video_mode, 
-                               value=mode_val, font=("Segoe UI", 11, "bold"),
-                               bg="#f9f9f9", activebackground=color,
-                               selectcolor="#0066CC", indicatoron=1,
-                               command=lambda m=mode_val, c=color: self._on_mode_change(m, c))
-            rb.pack(anchor="w", padx=10, pady=(10, 2))
+            rb = tk.Radiobutton(radio_frame,
+                              text=text,
+                              variable=self.video_mode,
+                              value=value,
+                              font=("Segoe UI", 11, "bold"),
+                              bg="#1a1d29",
+                              fg="#e4e6eb",
+                              selectcolor="#252836",
+                              activebackground="#1a1d29",
+                              cursor="hand2")
+            rb.pack(side=tk.LEFT, padx=10, pady=8)
             
-            desc_label = tk.Label(mode_frame, text=desc, font=("Segoe UI", 9),
-                                 fg="#666", bg="#f9f9f9", wraplength=750)
-            desc_label.pack(anchor="w", padx=30, pady=(0, 10))
+            tk.Label(radio_frame,
+                    text=desc,
+                    font=("Segoe UI", 9),
+                    fg="#9499a8",
+                    bg="#1a1d29").pack(side=tk.LEFT, padx=5)
         
-        # Demo person picker
-        self.person_image_path = None
-        picker_frame = tk.Frame(content_inner, bg="#ffffff")
-        picker_frame.pack(fill=tk.X, pady=(0, 10))
+        # AI Avatar Settings
+        self._add_section(settings_inner, "🤖 AI Avatar")
+        avatar_frame = tk.Frame(settings_inner, bg="#252836")
+        avatar_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
         
-        # AI Avatar toggle (checkbox)
-        self.use_ai_avatar = tk.BooleanVar(value=False)
-        ai_frame = tk.Frame(content_inner, bg="#ffffff", relief=tk.GROOVE, bd=2)
-        ai_frame.pack(fill=tk.X, pady=(0, 15))
+        enable_frame = tk.Frame(avatar_frame, bg="#1a1d29")
+        enable_frame.pack(fill=tk.X, pady=5)
         
-        ai_check = tk.Checkbutton(
-            ai_frame, 
-            text="🤖 Sử dụng AI Avatar (Talking Head - D-ID)", 
-            variable=self.use_ai_avatar,
-            font=("Segoe UI", 10, "bold"),
-            bg="#ffffff",
-            activebackground="#e8f5e9",
-            selectcolor="#4CAF50"
-        )
-        ai_check.pack(anchor="w", padx=10, pady=10)
+        self.use_ai_avatar = tk.BooleanVar(value=True)
+        ai_check = tk.Checkbutton(enable_frame,
+                                 text="Enable Talking Avatar",
+                                 variable=self.use_ai_avatar,
+                                 font=("Segoe UI", 11, "bold"),
+                                 bg="#1a1d29",
+                                 fg="#e4e6eb",
+                                 selectcolor="#252836",
+                                 activebackground="#1a1d29",
+                                 cursor="hand2")
+        ai_check.pack(side=tk.LEFT, padx=10, pady=8)
         
-        # Avatar backend selector (Colab free vs D-ID paid)
-        backend_frame = tk.Frame(ai_frame, bg="#ffffff")
-        backend_frame.pack(anchor="w", padx=30, pady=(0, 10))
+        # Backend selection
+        backend_frame = tk.Frame(avatar_frame, bg="#1a1d29")
+        backend_frame.pack(fill=tk.X, padx=30, pady=(5, 0))
         
-        self.avatar_backend = tk.StringVar(value="colab")
+        self.avatar_backend = tk.StringVar(value="wav2lip")
         
-        colab_rb = tk.Radiobutton(
-            backend_frame,
-            text="🆓 Colab (Miễn phí - cần setup)",
-            variable=self.avatar_backend,
-            value="colab",
-            font=("Segoe UI", 9),
-            bg="#ffffff"
-        )
-        colab_rb.pack(anchor="w")
+        backends = [
+            ("⚡ Wav2Lip", "wav2lip", "Fast & Free"),
+            ("💎 D-ID", "did", "Premium Quality"),
+        ]
         
-        did_rb = tk.Radiobutton(
-            backend_frame,
-            text="💳 D-ID API (Trả phí - dễ dùng)",
-            variable=self.avatar_backend,
-            value="did",
-            font=("Segoe UI", 9),
-            bg="#ffffff"
-        )
-        did_rb.pack(anchor="w")
+        for text, value, desc in backends:
+            back_row = tk.Frame(backend_frame, bg="#1a1d29")
+            back_row.pack(fill=tk.X, pady=3)
+            
+            rb = tk.Radiobutton(back_row,
+                              text=text,
+                              variable=self.avatar_backend,
+                              value=value,
+                              font=("Segoe UI", 10),
+                              bg="#1a1d29",
+                              fg="#9499a8",
+                              selectcolor="#252836",
+                              cursor="hand2")
+            rb.pack(side=tk.LEFT)
+            
+            tk.Label(back_row,
+                    text=f"• {desc}",
+                    font=("Segoe UI", 8),
+                    fg="#6c757d",
+                    bg="#1a1d29").pack(side=tk.LEFT, padx=5)
         
-        ai_note = tk.Label(
-            ai_frame, 
-            text="ℹ️ Colab: Upload notebook lên colab.research.google.com, chạy cell 5, copy URL ngrok\n   D-ID: Set DID_API_KEY env variable. Free trial: 20 videos",
-            font=("Segoe UI", 8),
-            fg="#666",
-            bg="#ffffff",
-            justify="left"
-        )
-        ai_note.pack(anchor="w", padx=30, pady=(0, 10))
+        # Upload Image
+        self._add_section(settings_inner, "👤 Reviewer Image")
+        upload_frame = tk.Frame(settings_inner, bg="#252836")
+        upload_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
         
-        self.pick_person_btn = tk.Button(picker_frame, text="👤 Chọn ảnh người (Demo + Reviewer)",
-                                        font=("Segoe UI", 10), bg="#eeeeee", fg="#333",
-                                        relief=tk.RAISED, bd=2,
-                                        command=self._pick_person_image, cursor="hand2")
-        self.pick_person_btn.pack(side=tk.LEFT, padx=10)
-        self.pick_person_btn.config(state=tk.DISABLED)
+        upload_inner = tk.Frame(upload_frame, bg="#1a1d29")
+        upload_inner.pack(fill=tk.X, pady=5)
         
-        self.person_label = tk.Label(picker_frame, text="Chưa chọn ảnh",
-                                    font=("Segoe UI", 9), fg="#666", bg="#ffffff")
-        self.person_label.pack(side=tk.LEFT, padx=10)
+        self.upload_btn = tk.Button(upload_inner,
+                                    text="📁 Choose Image",
+                                    font=("Segoe UI", 10, "bold"),
+                                    bg="#6c63ff",
+                                    fg="white",
+                                    activebackground="#5a52d5",
+                                    relief=tk.FLAT,
+                                    cursor="hand2",
+                                    command=self._select_person_image)
+        self.upload_btn.pack(side=tk.LEFT, padx=10, pady=8, ipadx=15, ipady=8)
         
-        # Create Button
-        btn_frame = tk.Frame(content_inner, bg="#ffffff")
-        btn_frame.pack(fill=tk.X, pady=(0, 15))
+        self.image_label = tk.Label(upload_inner,
+                                    text="No image selected",
+                                    font=("Segoe UI", 9),
+                                    fg="#6c757d",
+                                    bg="#1a1d29")
+        self.image_label.pack(side=tk.LEFT, padx=10)
         
-        create_btn = tk.Button(btn_frame, text="🚀 Tạo Video Ngay", 
-                              command=self._on_create_video,
-                              font=("Segoe UI", 12, "bold"),
-                              bg="#0066CC", fg="white", 
-                              activebackground="#0052A3",
-                              relief=tk.RAISED, bd=3,
-                              cursor="hand2", pady=12)
-        create_btn.pack(fill=tk.X)
+        # Update scroll region
+        settings_inner.update_idletasks()
+        settings_scroll.configure(scrollregion=settings_scroll.bbox("all"))
         
-        # Thumbnail Section
-        thumb_section = tk.LabelFrame(content_inner, text="🖼 Preview Sản Phẩm",
-                                     font=("Segoe UI", 11, "bold"), bg="#ffffff",
-                                     fg="#333", relief=tk.GROOVE, bd=2)
-        thumb_section.pack(fill=tk.X, pady=(0, 15))
+        # === RIGHT: ACTIONS & PREVIEW ===
+        # Generate Button
+        gen_frame = tk.Frame(right, bg="#252836")
+        gen_frame.pack(fill=tk.X, padx=20, pady=20)
         
-        self.thumbnail_label = tk.Label(thumb_section, bg="#f9f9f9", 
-                                       text="Chưa có ảnh", fg="#999",
-                                       font=("Segoe UI", 10))
-        self.thumbnail_label.pack(pady=20)
+        self.generate_btn = tk.Button(gen_frame,
+                                     text="🚀 Generate Video",
+                                     font=("Segoe UI", 16, "bold"),
+                                     bg="#6c63ff",
+                                     fg="white",
+                                     activebackground="#5a52d5",
+                                     relief=tk.FLAT,
+                                     cursor="hand2",
+                                     command=self._generate_video)
+        self.generate_btn.pack(fill=tk.X, ipady=18)
         
-        # Progress Section
-        progress_frame = tk.LabelFrame(content_inner, text="📊 Tiến Độ",
-                                      font=("Segoe UI", 11, "bold"), bg="#ffffff",
-                                      fg="#333", relief=tk.GROOVE, bd=2)
-        progress_frame.pack(fill=tk.X, pady=(0, 15))
+        # Status
+        status_card = tk.Frame(right, bg="#1a1d29")
+        status_card.pack(fill=tk.X, padx=20, pady=(0, 15))
         
-        progress_inner = tk.Frame(progress_frame, bg="#ffffff")
-        progress_inner.pack(fill=tk.X, padx=10, pady=10)
+        tk.Label(status_card,
+                text="📊 Status",
+                font=("Segoe UI", 12, "bold"),
+                fg="#e4e6eb",
+                bg="#1a1d29").pack(anchor="w", padx=15, pady=(15, 5))
         
-        # Progress bar with percentage
-        self.progress = ttk.Progressbar(progress_inner, mode="determinate", 
-                                       variable=self.progress_percent, maximum=100)
-        self.progress.pack(fill=tk.X, pady=(0, 5))
+        self.status_label = tk.Label(status_card,
+                                     textvariable=self.status_text,
+                                     font=("Segoe UI", 10),
+                                     fg="#9499a8",
+                                     bg="#1a1d29",
+                                     wraplength=400,
+                                     justify=tk.LEFT)
+        self.status_label.pack(anchor="w", padx=15, pady=(0, 10))
         
-        # Percentage label
-        self.percent_label = tk.Label(progress_inner, textvariable=self.progress_percent,
-                                     font=("Segoe UI", 10, "bold"), fg="#0066CC",
-                                     bg="#ffffff")
-        self.percent_label.pack()
+        # Progress bar
+        progress_style = ttk.Style()
+        progress_style.configure("Custom.Horizontal.TProgressbar",
+                                troughcolor="#252836",
+                                background="#6c63ff",
+                                thickness=25)
         
-        # Status Label
-        status_frame = tk.Frame(content_inner, bg="#e8f4ff", relief=tk.FLAT, bd=1)
-        status_frame.pack(fill=tk.X)
+        self.progress_bar = ttk.Progressbar(status_card,
+                                           variable=self.progress_percent,
+                                           maximum=100,
+                                           style="Custom.Horizontal.TProgressbar")
+        self.progress_bar.pack(fill=tk.X, padx=15, pady=(0, 15))
         
-        self.status_label = tk.Label(status_frame, textvariable=self.status_text,
-                                    font=("Segoe UI", 10), fg="#0066CC",
-                                    bg="#e8f4ff", wraplength=880, pady=10)
-        self.status_label.pack()
+        # Preview
+        preview_card = tk.Frame(right, bg="#1a1d29")
+        preview_card.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
-        # Log Section - NEW!
-        log_section = tk.LabelFrame(content_inner, text="📋 Log Chi Tiết",
-                                   font=("Segoe UI", 11, "bold"), bg="#ffffff",
-                                   fg="#333", relief=tk.GROOVE, bd=2)
-        log_section.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        tk.Label(preview_card,
+                text="📺 Preview",
+                font=("Segoe UI", 12, "bold"),
+                fg="#e4e6eb",
+                bg="#1a1d29").pack(anchor="w", padx=15, pady=(15, 10))
         
-        log_inner = tk.Frame(log_section, bg="#ffffff")
-        log_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.preview_canvas = tk.Canvas(preview_card,
+                                       width=400,
+                                       height=450,
+                                       bg="#252836",
+                                       highlightthickness=0)
+        self.preview_canvas.pack(padx=15, pady=(0, 15))
         
-        # Create scrolled text widget for logs
-        log_scroll = tk.Scrollbar(log_inner)
-        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        # Tips
+        tips_card = tk.Frame(right, bg="#1a1d29")
+        tips_card.pack(fill=tk.X, padx=20, pady=(0, 20))
         
-        self.log_text = tk.Text(log_inner, height=8, font=("Consolas", 9),
-                               bg="#1e1e1e", fg="#00ff00", wrap=tk.WORD,
-                               yscrollcommand=log_scroll.set, relief=tk.FLAT)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-        log_scroll.config(command=self.log_text.yview)
+        tk.Label(tips_card,
+                text="💡 Pro Tips",
+                font=("Segoe UI", 11, "bold"),
+                fg="#e4e6eb",
+                bg="#1a1d29").pack(anchor="w", padx=15, pady=(15, 8))
         
-        # Make log read-only
-        self.log_text.config(state=tk.DISABLED)
+        tips = [
+            "Use Reviewer mode for talking head videos",
+            "Upload clear face photos for best results",
+            "Wav2Lip is faster, D-ID has higher quality",
+        ]
         
-        # Set initial mode highlight
-        self.root.after(100, lambda: self._on_mode_change("simple", "#e3f2fd"))
+        for tip in tips:
+            tip_frame = tk.Frame(tips_card, bg="#1a1d29")
+            tip_frame.pack(fill=tk.X, padx=15, pady=3)
+            
+            tk.Label(tip_frame,
+                    text="•",
+                    font=("Segoe UI", 10),
+                    fg="#6c63ff",
+                    bg="#1a1d29").pack(side=tk.LEFT, padx=(0, 5))
+            
+            tk.Label(tip_frame,
+                    text=tip,
+                    font=("Segoe UI", 9),
+                    fg="#9499a8",
+                    bg="#1a1d29",
+                    wraplength=350,
+                    justify=tk.LEFT).pack(side=tk.LEFT)
+        
+        tk.Frame(tips_card, bg="#1a1d29", height=15).pack()
 
-    # ================= CORE =================
-    def _on_create_video(self):
+    def _add_section(self, parent, title):
+        """Add section header"""
+        frame = tk.Frame(parent, bg="#252836")
+        frame.pack(fill=tk.X, padx=20, pady=(15, 10))
+        
+        tk.Label(frame,
+                text=title,
+                font=("Segoe UI", 13, "bold"),
+                fg="#e4e6eb",
+                bg="#252836").pack(anchor="w")
+
+    def _apply_preset(self, mode, avatar):
+        """Apply quick preset"""
+        self.video_mode.set(mode)
+        self.use_ai_avatar.set(avatar)
+        self.status_text.set(f"✅ Applied: {mode.title()} preset")
+
+    def _select_person_image(self):
+        """Upload reviewer image"""
+        path = filedialog.askopenfilename(
+            title="Select Reviewer Image",
+            filetypes=[("Images", "*.jpg *.jpeg *.png")]
+        )
+        if path:
+            self.person_image_path = path
+            filename = os.path.basename(path)
+            self.image_label.config(text=f"✓ {filename[:25]}...", fg="#6c63ff")
+            self.status_text.set(f"✅ Loaded: {filename}")
+
+    def _generate_video(self):
+        """Start video generation"""
         if self.is_processing:
-            messagebox.showwarning("Đang chạy", "Đợi xong đã!")
-            return
-
-        urls = [u.strip() for u in self.url_text.get("1.0", tk.END).splitlines() if u.strip()]
-        if not urls:
-            messagebox.showerror("Lỗi", "Chưa nhập link")
             return
         
-        # Check if AI Avatar is enabled but not configured
-        if self.use_ai_avatar.get():
-            avatar_backend = self.avatar_backend.get()
-            if avatar_backend == "colab":
-                colab_url = os.getenv("COLAB_API_URL")
-                if not colab_url:
-                    messagebox.showerror(
-                        "⚠️ Colab API chưa setup",
-                        "Hướng dẫn setup Colab:\n\n"
-                        "1. Mở file: SadTalker_Colab_Free.ipynb\n"
-                        "2. Upload lên Google Colab\n"
-                        "3. Chạy Cell 5 (API Server)\n"
-                        "4. Copy URL ngrok từ output\n"
-                        "5. Chạy lệnh (thay URL):\n"
-                        "   $env:COLAB_API_URL='https://denny-pseudospiritual-stomachically.ngrok-free.dev'\n\n"
-                        "Hoặc tắt AI Avatar nếu chỉ muốn dùng ảnh tĩnh"
-                    )
-                    return
-            elif avatar_backend == "did":
-                did_api_key = os.getenv("DID_API_KEY")
-                if not did_api_key:
-                    messagebox.showerror(
-                        "⚠️ D-ID API chưa setup",
-                        "Set DID_API_KEY environment variable:\n\n"
-                        "$env:DID_API_KEY='your-api-key-here'\n\n"
-                        "Hoặc đăng ký free trial tại:\n"
-                        "https://www.d-id.com"
-                    )
-                    return
-
+        url = self.url_text.get("1.0", tk.END).strip()
+        if not url:
+            messagebox.showwarning("Missing URL", "Please enter a product URL")
+            return
+        
         self.is_processing = True
+        self.generate_btn.config(state=tk.DISABLED, bg="#4a4a4a")
         self.progress_percent.set(0)
-
-        thread = threading.Thread(target=self._create_video_worker, args=(urls[0],))
+        self.status_text.set("🚀 Starting...")
+        
+        thread = threading.Thread(target=self._create_video_worker, args=(url,))
         thread.daemon = True
         thread.start()
 
     def _create_video_worker(self, url):
+        """Background video creation"""
         try:
-            self._ui("🔍 Đang scrape sản phẩm...", 5)
-            self._append_log(f"🔗 URL: {url}")
+            self._ui("📥 Scraping product...", 10)
             
             scraper = get_scraper(url)
-            product_data = scraper.scrape(url)
-
-            if not product_data or not product_data.get("description"):
-                raise ValueError("Scrape không có mô tả")
+            if not scraper:
+                raise ValueError("Unsupported platform")
             
-            self._append_log(f"✅ Scrape thành công: {product_data.get('title', 'N/A')[:50]}...")
-            self._append_log(f"📸 Có {len(product_data.get('image_urls', []))} ảnh từ scraper")
-
-            # Hiển thị thumbnail sản phẩm (safe access)
-            image_urls = product_data.get("image_urls") or []
-            logger.info("Product has %d images from scraper", len(image_urls))
-            img_url = image_urls[0] if image_urls else None
-            if img_url:
-                self._show_thumbnail(img_url)
-            else:
-                logger.debug("No thumbnail to show for this product")
-
-            self._ui("📝 Đang xử lý nội dung...", 8)
+            product_data = scraper.scrape(url)
+            
+            if not product_data or not product_data.get("title"):
+                raise ValueError("Failed to scrape product")
+            
+            if not product_data.get("description"):
+                raise ValueError("No description found")
+            
+            self._ui("🔄 Processing content...", 30)
+            
             processor = ContentProcessor()
             processed = processor.process(product_data)
             
-            logger.info("After processing: %d images in 'image_urls'", len(processed.get("image_urls", [])))
-            self._append_log(f"📸 Sau xử lý: {len(processed.get('image_urls', []))} ảnh")
-            
-            if not processed:
-                logger.error("Processor returned None (processing failed) for product_data: %s", product_data)
-                raise RuntimeError("Processor failed to process product data")
-
             if not processed.get("description"):
-                logger.warning("⚠️ Processor làm rỗng mô tả → dùng lại mô tả gốc")
                 processed["description"] = product_data["description"]
-
-            if not processed["description"].strip():
-                raise ValueError("Description rỗng – không render")
-
-            self._ui("🎬 Đang render video...", 0)
+            
+            self._ui("🎬 Rendering video...", 50)
+            
             video_mode = self.video_mode.get()
             use_ai_avatar = self.use_ai_avatar.get()
             avatar_backend = self.avatar_backend.get()
             
-            # Đính kèm ảnh người (nếu có) cho chế độ Demo/AI Avatar
             processed["person_image_path"] = self.person_image_path
             
-            # Show mode in status
-            mode_names = {
-                "simple": "Video Đơn Giản",
-                "demo": "Video Demo (người cầm sản phẩm)",
-                "reviewer": "Video Reviewer (người nói)"
-            }
-            mode_text = mode_names.get(video_mode, video_mode)
-            if use_ai_avatar:
-                backend_emoji = "🆓" if avatar_backend == "colab" else "💳"
-                mode_text += f" + AI Avatar {backend_emoji}"
-            self._ui(f"🎬 Render {mode_text}...", 0)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"output/videos/video_{timestamp}.mp4"
             
             renderer = SmartVideoRenderer(
-                video_mode=video_mode, 
+                video_mode=video_mode,
                 use_ai_avatar=use_ai_avatar,
                 avatar_backend=avatar_backend
             )
-            logger.info(f"Using video mode: {video_mode}, AI Avatar: {use_ai_avatar}, Backend: {avatar_backend}")
-            output_file = f"output/videos/video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             
-            # Render with progress callback
-            ok = renderer.render(processed, output_file, progress_callback=self._render_progress)
-
-            if not ok:
-                raise RuntimeError("Render thất bại")
-
-            self._ui(f"✅ Video đã tạo xong: {output_file}", 100)
-            messagebox.showinfo("Thành công", f"Video đã tạo:\n{output_file}")
-
-        except Exception as e:
-            logger.exception("Error in _create_video_worker: %s", e)
-            messagebox.showerror("Lỗi", str(e))
-            self._ui("❌ Lỗi: " + str(e), 0)
-        finally:
-            self.progress_percent.set(0)
-            self.is_processing = False
-
-    # ================= UI HELPERS =================
-    def _on_mode_change(self, mode, color):
-        """Highlight selected mode frame."""
-        # Persist selected mode
-        self.video_mode.set(mode)
-        # Enable/disable person picker based on mode
-        if mode in ("demo", "reviewer"):  # Both demo and reviewer need person image
-            self.pick_person_btn.config(state=tk.NORMAL)
-            self.person_label.config(text=self.person_label.cget("text"))
-        else:
-            self.pick_person_btn.config(state=tk.DISABLED)
-            self.person_image_path = None
-            self.person_label.config(text="Chưa chọn ảnh")
-        
-        # Reset all frames
-        for m, frame in self.mode_frames.items():
-            if m == mode:
-                frame.config(bg=color, bd=3, relief=tk.SUNKEN)
+            success = renderer.render(
+                processed,
+                output_path,
+                max_images=5,
+                progress_callback=lambda msg, pct: self._ui(msg, pct)
+            )
+            
+            if success:
+                self.video_path = output_path
+                self._ui("✅ Video created!", 100)
+                self.root.after(100, lambda: messagebox.showinfo(
+                    "Success",
+                    f"Video saved:\n{output_path}"
+                ))
             else:
-                frame.config(bg="#f9f9f9", bd=2, relief=tk.RAISED)
-        
-        # Update status
-        mode_names = {
-            "simple": "Video Đơn Giản",
-            "demo": "Video Demo"
-        }
-        self.status_text.set(f"✅ Đã chọn: {mode_names.get(mode, mode)}")
-    
-    def _ui(self, text, percent=None):
-        self.root.after(0, lambda: self.status_text.set(text))
-        if percent is not None:
-            self.root.after(0, lambda: self.progress_percent.set(percent))
-        
-        # Also append to log window
-        self._append_log(text)
-    
-    def _append_log(self, message):
-        """Append message to log text widget."""
-        def update():
-            self.log_text.config(state=tk.NORMAL)
-            timestamp = __import__('datetime').datetime.now().strftime("%H:%M:%S")
-            self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
-            self.log_text.see(tk.END)  # Auto-scroll to bottom
-            self.log_text.config(state=tk.DISABLED)
-        
-        self.root.after(0, update)
-    
-    def _render_progress(self, message, percent):
-        """Callback for real-time render progress."""
-        self._ui(f"🎬 {message}", percent)
-
-    def _pick_person_image(self):
-        path = filedialog.askopenfilename(title="Chọn ảnh người (jpg/png)",
-                                          filetypes=[("Image files", "*.jpg;*.jpeg;*.png")])
-        if path:
-            self.person_image_path = path
-            name = os.path.basename(path)
-            self.person_label.config(text=f"Đã chọn: {name}")
-            self._append_log(f"👤 Ảnh người: {path}")
-
-    def _show_thumbnail(self, url):
-        try:
-            import requests
-            from io import BytesIO
-            response = requests.get(url, timeout=15)
-            img = Image.open(BytesIO(response.content))
-            img.thumbnail((300, 300))
-            self.thumbnail_img = ImageTk.PhotoImage(img)
-            self.root.after(0, lambda: self.thumbnail_label.config(image=self.thumbnail_img))
+                raise Exception("Rendering failed")
+                
         except Exception as e:
-            logger.warning(f"Lỗi load thumbnail: {e}")
+            logger.exception("Video creation failed")
+            self._ui(f"❌ Error: {str(e)}", 0)
+            self.root.after(100, lambda: messagebox.showerror(
+                "Error",
+                f"Failed: {str(e)}"
+            ))
+        finally:
+            self.is_processing = False
+            self.root.after(100, lambda: self.generate_btn.config(
+                state=tk.NORMAL,
+                bg="#6c63ff"
+            ))
 
-    # ================= RUN =================
+    def _ui(self, message, progress):
+        """Update UI from worker thread"""
+        def update():
+            self.status_text.set(message)
+            if progress is not None:
+                self.progress_percent.set(progress)
+        self.root.after(0, update)
+
     def run(self):
+        """Start app"""
         self.root.mainloop()
+
+
+if __name__ == "__main__":
+    app = VideoCreatorApp()
+    app.run()

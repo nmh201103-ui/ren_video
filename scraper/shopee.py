@@ -1,6 +1,10 @@
 import re
 import time
 from typing import Dict, List
+from io import BytesIO
+import requests
+from PIL import Image
+import numpy as np
 from playwright.sync_api import sync_playwright
 from scraper.base import BaseScraper
 from utils.logger import get_logger
@@ -184,7 +188,7 @@ class ShopeeScraper(BaseScraper):
 
     def _get_images_advanced(self, page) -> List[str]:
         try:
-            return page.evaluate("""() => {
+            raw_urls = page.evaluate("""() => {
                 const urls = new Set();
                 document.querySelectorAll('img').forEach(img => {
                     let src = img.getAttribute('data-src') || img.src;
@@ -196,10 +200,124 @@ class ShopeeScraper(BaseScraper):
                         urls.add(clean);
                     }
                 });
-                return Array.from(urls).slice(0, 10);
+                return Array.from(urls).slice(0, 15);  // Lấy 15 ảnh để lọc
             }""")
-        except:
+            
+            # Lọc ảnh sản phẩm thực (loại bỏ banner, voucher, model)
+            filtered = self._filter_product_images(raw_urls)
+            logger.info(f"📸 Lọc ảnh: {len(raw_urls)} -> {len(filtered)} ảnh sản phẩm")
+            
+            return filtered[:10]  # Trả về max 10 ảnh
+        except Exception as e:
+            logger.error(f"❌ Failed to get images: {e}")
             return []
+    
+    def _filter_product_images(self, image_urls: List[str]) -> List[str]:
+        """Filter to keep only real product images, remove banners/vouchers/models"""
+        filtered = []
+        
+        for url in image_urls:
+            try:
+                if self._is_product_image(url):
+                    filtered.append(url)
+            except Exception as e:
+                logger.debug(f"⚠️ Failed to check image {url}: {e}")
+                # If check fails, keep it (safe default)
+                filtered.append(url)
+        
+        return filtered
+    
+    def _is_product_image(self, url: str) -> bool:
+        """
+        Detect if image is real product photo (not banner/voucher/model).
+        Returns True if likely a product image.
+        """
+        try:
+            # CRITICAL: Only accept Shopee CDN URLs (block local files)
+            if not url.startswith('http'):
+                logger.debug(f"❌ Rejected: Not HTTP URL")
+                return False
+            
+            # Block local file paths that might leak into scraper
+            if 'file:///' in url or 'C:/' in url or 'C:' in url or 'Users/' in url:
+                logger.debug(f"❌ Rejected: Local file path")
+                return False
+            
+            # Must be from Shopee CDN
+            if not ('usercontent' in url or 'shopee.com/file/' in url or 'shopee' in url.lower()):
+                logger.debug(f"❌ Rejected: Not Shopee CDN")
+                return False
+            
+            # Download image
+            response = requests.get(url, timeout=5, stream=True)
+            response.raise_for_status()
+            img = Image.open(BytesIO(response.content)).convert('RGB')
+            
+            # 1. Check aspect ratio (banners usually wide, products square-ish)
+            width, height = img.size
+            aspect_ratio = width / height
+            
+            # CHỈ loại bỏ banner CỰC KỲ rõ ràng (quá ngang)
+            if aspect_ratio > 8.0 or aspect_ratio < 0.12:
+                logger.debug(f"❌ Rejected: Extreme aspect ratio {aspect_ratio:.2f}")
+                return False
+            
+            # 2. Check size - chỉ loại ảnh icon cực nhỏ
+            if width < 100 or height < 100:
+                logger.debug(f"❌ Rejected: Too small {width}x{height}")
+                return False
+            
+            # TẮT text overlay check - quá nhiều false positive
+            # TẮT color distribution check - quá nhiều false positive
+            
+            return True  # Pass most images
+            
+        except Exception as e:
+            logger.debug(f"⚠️ Image check failed: {e}, keeping image")
+            return True  # Safe default: keep if unable to check
+    
+    def _has_heavy_text_overlay(self, img: Image.Image) -> bool:
+        """Detect if image has heavy text overlay (banner characteristic)"""
+        try:
+            # Convert to grayscale
+            gray = img.convert('L')
+            arr = np.array(gray)
+            
+            # Detect edges (text has many edges)
+            from scipy import ndimage
+            edges = ndimage.sobel(arr)
+            edge_ratio = np.sum(edges > 40) / arr.size
+            
+            # If more than 30% of pixels are edges, likely has text
+            return edge_ratio > 0.30
+            
+        except:
+            return False  # If detection fails, assume no text
+    
+    def _is_single_color_dominant(self, img: Image.Image) -> bool:
+        """Detect if single color dominates (voucher/icon characteristic)"""
+        try:
+            # Resize to speed up
+            img_small = img.resize((100, 100))
+            arr = np.array(img_small)
+            
+            # Check if one color channel dominates
+            r_mean, g_mean, b_mean = arr[:,:,0].mean(), arr[:,:,1].mean(), arr[:,:,2].mean()
+            total = r_mean + g_mean + b_mean
+            
+            # If one channel is > 70% of total, single color dominates
+            if max(r_mean, g_mean, b_mean) / total > 0.7:
+                return True
+            
+            # Check color variance
+            variance = np.var(arr)
+            if variance < 300:  # Low variance = single color
+                return True
+            
+            return False
+            
+        except:
+            return False
 
     def _empty_data(self, url: str) -> Dict:
         return {

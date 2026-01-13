@@ -24,7 +24,7 @@ from video.ai_providers import (
     OpenAIScriptGenerator
 )
 from video.did_avatar import DIDTalkingAvatar
-from video.colab_avatar import ColabSadTalkerAvatar
+from video.wav2lip_avatar import Wav2LipAvatar
 
 try:
     from rembg import remove
@@ -41,7 +41,7 @@ if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
 
 class SmartVideoRenderer:
 
-    def __init__(self, template=None, video_mode="simple", use_ai_avatar=False, avatar_backend="colab"):
+    def __init__(self, template=None, video_mode="simple", use_ai_avatar=False, avatar_backend="wav2lip"):
         # HIGH QUALITY: 1080p @ 30fps cho TikTok/Shorts (giống Sora/Veo)
         self.template = template or {"width": 1080, "height": 1920, "fps": 30}
         self.temp_files = []
@@ -49,13 +49,13 @@ class SmartVideoRenderer:
         self.video_mode = video_mode  # "simple", "demo"
         self.person_image_path = None  # For demo mode
         self.use_ai_avatar = use_ai_avatar  # Enable AI talking avatar
-        self.avatar_backend = avatar_backend  # "colab" (free) or "did" (paid)
+        self.avatar_backend = avatar_backend  # "wav2lip" (free local) or "did" (paid)
         
         # Initialize avatar generator based on backend
         if use_ai_avatar:
-            if avatar_backend == "colab":
-                self.avatar_gen = ColabSadTalkerAvatar()
-                logger.info("Using FREE Colab SadTalker backend")
+            if avatar_backend == "wav2lip":
+                self.avatar_gen = Wav2LipAvatar()
+                logger.info("Using FREE Wav2Lip (local) backend")
             elif avatar_backend == "did":
                 self.avatar_gen = DIDTalkingAvatar()
                 logger.info("Using D-ID API backend (paid)")
@@ -206,23 +206,17 @@ class SmartVideoRenderer:
         return True
 
     def _create_avatar_scene(self, image_path, audio_path, scene_idx, progress_callback=None):
-        """Create AI talking avatar video using Colab/D-ID"""
+        """Create AI talking avatar video using Wav2Lip/D-ID"""
         try:
             if not self.avatar_gen:
                 logger.warning("⚠️ Avatar generator not initialized")
                 return None
             
-            # Check if backend is properly configured BEFORE trying to create
-            if self.avatar_backend == "colab":
-                colab_url = os.getenv("COLAB_API_URL")
-                if not colab_url:
-                    logger.error("❌ Colab API URL not configured. Set COLAB_API_URL environment variable")
-                    logger.info("📋 Instructions: Run SadTalker_Colab_Free.ipynb cell 5, copy ngrok URL, then:")
-                    logger.info("   $env:COLAB_API_URL='https://denny-pseudospiritual-stomachically.ngrok-free.dev'")
-                    return None
-            
             if progress_callback:
-                backend_name = "Colab (FREE)" if self.avatar_backend == "colab" else "D-ID"
+                if self.avatar_backend == "wav2lip":
+                    backend_name = "Wav2Lip (FREE-LOCAL)"
+                else:
+                    backend_name = "D-ID (PAID)"
                 progress_callback(f"🤖 Creating AI avatar ({backend_name}) for scene {scene_idx+1}...", None)
             
             # Output path for avatar video
