@@ -21,7 +21,8 @@ from video.ai_providers import (
     GTTSProvider, 
     HeuristicScriptGenerator, 
     OllamaScriptGenerator, 
-    OpenAIScriptGenerator
+    OpenAIScriptGenerator,
+    MovieScriptGenerator
 )
 from video.did_avatar import DIDTalkingAvatar
 from video.wav2lip_avatar import Wav2LipAvatar
@@ -41,7 +42,7 @@ if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
 
 class SmartVideoRenderer:
 
-    def __init__(self, template=None, video_mode="simple", use_ai_avatar=False, avatar_backend="wav2lip"):
+    def __init__(self, template=None, video_mode="simple", use_ai_avatar=False, avatar_backend="wav2lip", content_type="product"):
         # HIGH QUALITY: 1080p @ 30fps cho TikTok/Shorts (giống Sora/Veo)
         self.template = template or {"width": 1080, "height": 1920, "fps": 30}
         self.temp_files = []
@@ -50,6 +51,7 @@ class SmartVideoRenderer:
         self.person_image_path = None  # For demo mode
         self.use_ai_avatar = use_ai_avatar  # Enable AI talking avatar
         self.avatar_backend = avatar_backend  # "wav2lip" (free local) or "did" (paid)
+        self.content_type = content_type  # "product" or "movie"
         
         # Initialize avatar generator based on backend
         if use_ai_avatar:
@@ -65,22 +67,32 @@ class SmartVideoRenderer:
         else:
             self.avatar_gen = None
         
-        # Initialize script generator based on env
-        provider = os.getenv("LLM_PROVIDER", "default").lower()
-        if provider == "openai" and os.getenv("OPENAI_API_KEY"):
-            self.script_gen = OpenAIScriptGenerator(
-                api_key=os.getenv("OPENAI_API_KEY"),
-                model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+        # Initialize script generator based on content type + env
+        if content_type == "movie":
+            # Use MovieScriptGenerator for movie reviews
+            use_llm = os.getenv("OPENAI_API_KEY") is not None
+            self.script_gen = MovieScriptGenerator(
+                use_llm=use_llm,
+                api_key=os.getenv("OPENAI_API_KEY")
             )
-            logger.info("Using OpenAI script generator")
-        elif provider == "ollama" or (not os.getenv("OPENAI_API_KEY") and self._has_ollama()):
-            self.script_gen = OllamaScriptGenerator(
-                model=os.getenv("OLLAMA_MODEL", "gemma3:4b")
-            )
-            logger.info("Using Ollama script generator")
+            logger.info("Using Movie script generator")
         else:
-            self.script_gen = HeuristicScriptGenerator()
-            logger.info("Using Heuristic script generator")
+            # Use product script generator
+            provider = os.getenv("LLM_PROVIDER", "default").lower()
+            if provider == "openai" and os.getenv("OPENAI_API_KEY"):
+                self.script_gen = OpenAIScriptGenerator(
+                    api_key=os.getenv("OPENAI_API_KEY"),
+                    model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+                )
+                logger.info("Using OpenAI script generator")
+            elif provider == "ollama" or (not os.getenv("OPENAI_API_KEY") and self._has_ollama()):
+                self.script_gen = OllamaScriptGenerator(
+                    model=os.getenv("OLLAMA_MODEL", "gemma3:4b")
+                )
+                logger.info("Using Ollama script generator")
+            else:
+                self.script_gen = HeuristicScriptGenerator()
+                logger.info("Using Heuristic script generator")
 
     def _has_ollama(self):
         try:

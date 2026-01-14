@@ -15,7 +15,7 @@ logger = get_logger()
 class VideoCreatorApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎬 Video Creator Pro")
+        self.root.title("🎬 NMH03 Video Pro")
         self.root.geometry("1300x800")
         self.root.resizable(True, True)
         self.root.configure(bg="#1a1d29")
@@ -26,6 +26,7 @@ class VideoCreatorApp:
         self.progress_percent = tk.IntVar(value=0)
         self.thumbnail_img = None
         self.video_mode = tk.StringVar(value="reviewer")
+        self.content_type = tk.StringVar(value="product")  # "product" or "movie"
         self.person_image_path = None
         
         self._setup_ui()
@@ -42,7 +43,7 @@ class VideoCreatorApp:
         header.pack_propagate(False)
         
         tk.Label(header,
-                text="🎬 Video Creator Pro",
+                text="🎬 NMH03 Video Pro",
                 font=("Segoe UI", 22, "bold"),
                 fg="#6c63ff",
                 bg="#252836").pack(side=tk.LEFT, padx=25, pady=20)
@@ -84,12 +85,13 @@ class VideoCreatorApp:
         quick_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
         
         presets = [
-            ("📦 Unboxing", "reviewer", True, "#6c63ff"),
-            ("⭐ Review", "reviewer", True, "#ff6584"),
-            ("📹 Simple", "simple", False, "#4CAF50"),
+            ("📦 Unboxing", "reviewer", True, "#6c63ff", "product"),
+            ("⭐ Review", "reviewer", True, "#ff6584", "product"),
+            ("📹 Simple", "simple", False, "#4CAF50", "product"),
+            ("📽️ Movie", "simple", False, "#FF8C00", "movie"),  # NEW: Movie Review
         ]
         
-        for text, mode, avatar, color in presets:
+        for text, mode, avatar, color, ctype in presets:
             btn = tk.Button(quick_frame,
                           text=text,
                           font=("Segoe UI", 10, "bold"),
@@ -98,11 +100,11 @@ class VideoCreatorApp:
                           activebackground=color,
                           relief=tk.FLAT,
                           cursor="hand2",
-                          command=lambda m=mode, a=avatar: self._apply_preset(m, a))
+                          command=lambda m=mode, a=avatar, ct=ctype: self._apply_preset(m, a, ct))
             btn.pack(side=tk.LEFT, padx=(0, 10), ipadx=15, ipady=10)
         
         # URL Input
-        self._add_section(settings_inner, "🔗 Product URL")
+        self._add_section(settings_inner, "🔗 Movie/Product URL")
         url_frame = tk.Frame(settings_inner, bg="#252836")
         url_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
         
@@ -342,11 +344,13 @@ class VideoCreatorApp:
                 fg="#e4e6eb",
                 bg="#252836").pack(anchor="w")
 
-    def _apply_preset(self, mode, avatar):
+    def _apply_preset(self, mode, avatar, content_type="product"):
         """Apply quick preset"""
         self.video_mode.set(mode)
         self.use_ai_avatar.set(avatar)
-        self.status_text.set(f"✅ Applied: {mode.title()} preset")
+        self.content_type.set(content_type)
+        preset_name = f"{mode.title()} ({content_type.title()})"
+        self.status_text.set(f"✅ Applied: {preset_name} preset")
 
     def _select_person_image(self):
         """Upload reviewer image"""
@@ -367,7 +371,8 @@ class VideoCreatorApp:
         
         url = self.url_text.get("1.0", tk.END).strip()
         if not url:
-            messagebox.showwarning("Missing URL", "Please enter a product URL")
+            msg = "Please enter a movie URL or product URL"
+            messagebox.showwarning("Missing URL", msg)
             return
         
         self.is_processing = True
@@ -382,7 +387,9 @@ class VideoCreatorApp:
     def _create_video_worker(self, url):
         """Background video creation"""
         try:
-            self._ui("📥 Scraping product...", 10)
+            content_type = self.content_type.get()
+            scrape_msg = "📽️ Scraping movie..." if content_type == "movie" else "📥 Scraping product..."
+            self._ui(scrape_msg, 10)
             
             scraper = get_scraper(url)
             if not scraper:
@@ -409,6 +416,7 @@ class VideoCreatorApp:
             video_mode = self.video_mode.get()
             use_ai_avatar = self.use_ai_avatar.get()
             avatar_backend = self.avatar_backend.get()
+            content_type = self.content_type.get()
             
             processed["person_image_path"] = self.person_image_path
             
@@ -418,7 +426,8 @@ class VideoCreatorApp:
             renderer = SmartVideoRenderer(
                 video_mode=video_mode,
                 use_ai_avatar=use_ai_avatar,
-                avatar_backend=avatar_backend
+                avatar_backend=avatar_backend,
+                content_type=content_type  # Pass content_type to renderer
             )
             
             success = renderer.render(

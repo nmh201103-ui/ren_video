@@ -12,13 +12,13 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 try:
-    # Import chính xác từ gui/app.py
-    from gui.app import VideoCreatorApp
-    print("✅ Đã kết nối module GUI thành công")
+    # Import v3 Complete Edition
+    from gui.app_v3_complete import NMH03VideoProV3
+    print("✅ Đã kết nối NMH03 Video Pro v3 Complete Edition")
 except ImportError as e:
     print(f"❌ Lỗi Import: {e}")
     sys.exit(1)
 
 if __name__ == "__main__":
-    app = VideoCreatorApp()
+    app = NMH03VideoProV3()
     app.run()

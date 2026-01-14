@@ -15,7 +15,7 @@ logger = get_logger()
 class VideoCreatorApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎬 Affiliate Video Creator Pro")
+        self.root.title("🎬 Affiliate NMH03 Video Pro")
         self.root.geometry("1200x950")
         self.root.resizable(True, True)
         self.root.configure(bg="#f0f2f5")
@@ -62,7 +62,7 @@ class VideoCreatorApp:
         header_frame = tk.Frame(main_frame, bg="#ffffff", relief=tk.RAISED, bd=2)
         header_frame.pack(fill=tk.X, pady=(0, 20))
         
-        ttk.Label(header_frame, text="🎬 Affiliate Video Creator Pro", 
+        ttk.Label(header_frame, text="🎬 Affiliate NMH03 Video Pro", 
                  style="Header.TLabel").pack(pady=15)
         
         # Content frame
