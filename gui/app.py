@@ -433,7 +433,7 @@ class VideoCreatorApp:
             success = renderer.render(
                 processed,
                 output_path,
-                max_images=5,
+                max_images=None,  # Use ALL available images, don't limit
                 progress_callback=lambda msg, pct: self._ui(msg, pct)
             )
             

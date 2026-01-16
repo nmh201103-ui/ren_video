@@ -5,6 +5,7 @@ import threading
 from threading import Thread
 import os
 from datetime import datetime
+import math
 from utils.helpers import get_scraper, ensure_directory
 from utils.logger import get_logger
 from processor.content import ContentProcessor
@@ -256,34 +257,85 @@ class NMH03VideoProV3:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
+        # Content Type Selection
+        self._add_card(scrollable, "📚 Content Type", "Choose what to create")
+        content_frame = tk.Frame(scrollable, bg="#21262d", padx=20, pady=15)
+        content_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+        
+        self.movie_content_type = tk.StringVar(value='movie')
+        
+        for ctype, label, desc in [
+            ('movie', '🎬 Movie Review', 'IMDb, Wikipedia movie'),
+            ('story', '📖 Web Story/Article', 'Blog, news, any webpage')
+        ]:
+            row = tk.Frame(content_frame, bg="#21262d")
+            row.pack(fill=tk.X, pady=5)
+            rb = tk.Radiobutton(row, text=label, variable=self.movie_content_type,
+                              value=ctype, font=("Segoe UI", 11, "bold"),
+                              bg="#21262d", fg="#c9d1d9", selectcolor="#161b22",
+                              command=self._toggle_movie_input_type)
+            rb.pack(side=tk.LEFT, padx=5)
+            tk.Label(row, text=desc, font=("Segoe UI", 9),
+                    fg="#8b949e", bg="#21262d").pack(side=tk.LEFT, padx=10)
+        
         # Movie Input
         self._add_card(scrollable, "🎬 Movie URL or Name", "IMDb, Wikipedia, or title")
-        help_text = tk.Label(scrollable,
+        self.movie_input_help = tk.Label(scrollable,
                             text="Examples: 'https://imdb.com/title/tt123', 'Oppenheimer', 'Avatar 2'",
                             font=("Segoe UI", 9),
                             fg="#8b949e", bg="#0d1117")
-        help_text.pack(padx=25, pady=(0, 5), anchor="w")
+        self.movie_input_help.pack(padx=25, pady=(0, 5), anchor="w")
         
         self.movie_url = tk.Text(scrollable, height=2, font=("Consolas", 10),
                                 bg="#21262d", fg="#c9d1d9", insertbackground="#58a6ff",
                                 relief=tk.FLAT, wrap=tk.WORD, padx=10, pady=10)
         self.movie_url.pack(fill=tk.X, padx=20, pady=(0, 20))
         
-        # Format
-        self._add_card(scrollable, "📐 Video Format", "Review length")
-        fmt_frame = tk.Frame(scrollable, bg="#21262d", padx=20, pady=15)
-        fmt_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+        # Video Duration Slider
+        self._add_card(scrollable, "⏱️ Video Duration", "Drag to set video length")
+        slider_frame = tk.Frame(scrollable, bg="#21262d", padx=20, pady=15)
+        slider_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
         
-        self.movie_format = tk.StringVar(value='medium')
-        for key, fmt in self.VIDEO_FORMATS.items():
-            row = tk.Frame(fmt_frame, bg="#21262d")
-            row.pack(fill=tk.X, pady=5)
-            rb = tk.Radiobutton(row, text=fmt['name'], variable=self.movie_format,
-                              value=key, font=("Segoe UI", 11, "bold"),
-                              bg="#21262d", fg="#c9d1d9", selectcolor="#161b22")
-            rb.pack(side=tk.LEFT, padx=5)
-            tk.Label(row, text=f"~{fmt['duration']}s", font=("Segoe UI", 9),
-                    fg="#8b949e", bg="#21262d").pack(side=tk.LEFT, padx=10)
+        # Label showing current value
+        duration_label_frame = tk.Frame(slider_frame, bg="#21262d")
+        duration_label_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        tk.Label(duration_label_frame, text="Duration:", font=("Segoe UI", 10, "bold"),
+                 fg="#c9d1d9", bg="#21262d").pack(side=tk.LEFT)
+        
+        self.movie_duration_var = tk.IntVar(value=60)
+        self.movie_duration_label = tk.Label(duration_label_frame, 
+                                             text="60s (Medium)", 
+                                             font=("Segoe UI", 12, "bold"),
+                                             fg="#58a6ff", bg="#21262d")
+        self.movie_duration_label.pack(side=tk.LEFT, padx=10)
+        
+        # Slider (15s to 180s)
+        self.movie_duration_slider = tk.Scale(slider_frame,
+                                             from_=15, to=180,
+                                             orient=tk.HORIZONTAL,
+                                             variable=self.movie_duration_var,
+                                             font=("Segoe UI", 10),
+                                             bg="#161b22", fg="#c9d1d9",
+                                             highlightthickness=0,
+                                             troughcolor="#0d1117",
+                                             activebackground="#58a6ff",
+                                             command=self._update_duration_label,
+                                             length=400,
+                                             width=20)
+        self.movie_duration_slider.pack(fill=tk.X, pady=(0, 5))
+        
+        # Quick presets
+        preset_frame = tk.Frame(slider_frame, bg="#21262d")
+        preset_frame.pack(fill=tk.X)
+        
+        for label, seconds in [("⚡ Short", 30), ("📹 Medium", 60), ("🎬 Long", 120)]:
+            tk.Button(preset_frame, text=label,
+                     font=("Segoe UI", 9),
+                     bg="#238636", fg="#ffffff",
+                     relief=tk.FLAT, cursor="hand2",
+                     command=lambda s=seconds: self.movie_duration_var.set(s),
+                     padx=10, pady=5).pack(side=tk.LEFT, padx=5)
         
         # Segment Detection
         self._add_card(scrollable, "✂️ Auto Segment Detection", "Smart chapter detection")
@@ -483,7 +535,7 @@ class NMH03VideoProV3:
         self.detection_method = tk.StringVar(value='audio')
         for method, label, desc in [
             ('audio', '🔊 Audio Peaks', 'Loud/exciting moments (fastest)'),
-            ('scene', '🎬 Scene Change', 'Action scenes, cuts (AI-powered)'),
+            ('semantic', '🧠 Content (ASR)', 'Understand speech, pick best lines'),
             ('uniform', '📏 Uniform', 'Evenly spaced clips (simple)')
         ]:
             row = tk.Frame(method_frame, bg="#21262d")
@@ -638,28 +690,60 @@ class NMH03VideoProV3:
         try:
             self._ui("🔄 Starting...", 5)
             
-            # Get format settings
-            format_key = (self.product_format.get() if content_type == "product" 
-                         else self.movie_format.get())
-            format_info = self.VIDEO_FORMATS[format_key]
+            # Determine actual content type (movie vs story)
+            actual_type = content_type
+            if content_type == "movie" and hasattr(self, 'movie_content_type'):
+                actual_type = self.movie_content_type.get()
             
-            self._ui(f"📥 Fetching {content_type} data...", 10)
-            scraper = get_scraper(url)
-            if not scraper:
-                raise ValueError("Unsupported platform")
+            # Get target duration from slider
+            target_duration = self.movie_duration_var.get() if hasattr(self, 'movie_duration_var') else 60
+            
+            # Calculate number of scenes based on duration
+            avg_per_scene = 15  # Average 15 seconds per scene
+            num_scenes = max(3, min(12, math.ceil(target_duration / avg_per_scene)))
+            
+            self._ui(f"📥 Fetching {actual_type} data...", 10)
+            
+            # Get appropriate scraper
+            if actual_type == "story":
+                try:
+                    # Import directly to avoid circular imports
+                    import sys
+                    sys.path.insert(0, 'scraper')
+                    from web_story import WebStoryCScraper
+                    scraper = WebStoryCScraper()
+                except ImportError as e:
+                    raise ValueError(f"Web story scraper not found: {e}")
+            else:
+                scraper = get_scraper(url)
+                if not scraper:
+                    raise ValueError("Unsupported platform")
             
             data = scraper.scrape(url)
             if not data.get("title"):
                 raise ValueError("Failed to fetch data")
             
             self._ui("🔄 Processing content...", 30)
-            processor = ContentProcessor()
-            processed = processor.process(data)
+            
+            # For story mode, process differently
+            if actual_type == "story":
+                processed = {
+                    'title': data.get('title', 'Story'),
+                    'description': data.get('description', ''),
+                    'content': data.get('content', ''),
+                    'image_urls': data.get('image_urls', [])  # Use downloaded images from scraper
+                }
+            else:
+                processor = ContentProcessor()
+                processed = processor.process(data)
             
             # Get settings
             if content_type == "product":
                 mode = self.product_mode.get()
                 use_avatar = self.product_use_avatar.get()
+                # Get format for product
+                format_key = self.product_format.get()
+                format_info = self.VIDEO_FORMATS[format_key]
             else:
                 mode = "simple"
                 use_avatar = False
@@ -671,25 +755,39 @@ class NMH03VideoProV3:
                 video_mode=mode,
                 use_ai_avatar=use_avatar,
                 avatar_backend="wav2lip",
-                content_type=content_type
+                content_type=actual_type
             )
             
-            # Generate script based on format
-            self._ui(f"📝 Generating {format_info['name']} script...", 40)
-            script = renderer.script_gen.generate(
-                processed['title'],
-                processed['description'],
-                processed.get('price', '')
-            )
+            # Generate script based on content type and format
+            self._ui(f"📝 Generating {actual_type} script ({target_duration}s)...", 40)
             
-            # Adjust script length based on format
-            if format_key == 'short':
-                script = script[:3]  # 3 scenes max
-            elif format_key == 'medium':
-                script = script[:5]  # 5 scenes
+            if actual_type == "story":
+                try:
+                    from video.story_generator import StoryScriptGenerator
+                    story_gen = StoryScriptGenerator()
+                    script = story_gen.generate(
+                        processed['title'],
+                        processed.get('description', ''),
+                        processed.get('content', ''),
+                        max_scenes=num_scenes
+                    )
+                except ImportError:
+                    raise ValueError("Story generator not found")
+            else:
+                script = renderer.script_gen.generate(
+                    processed['title'],
+                    processed['description'],
+                    processed.get('price', '')
+                )
+            
+            # Pass script to renderer so it doesn't regenerate
+            processed["script"] = script
+            
+            # Limit script to calculated scenes
+            script = script[:num_scenes]
             
             # SEGMENT DETECTION for movies
-            if content_type == "movie" and self.enable_segments.get():
+            if content_type == "movie" and actual_type == "movie" and self.enable_segments.get():
                 self._ui("✂️ Detecting segments...", 45)
                 segmenter = VideoSegmenter()
                 segments = segmenter.detect_segments(script)
@@ -702,15 +800,16 @@ class NMH03VideoProV3:
                     logger.info(f"💡 Suggested {len(clips)} clips")
             
             # Render
-            self._ui(f"🎬 Rendering {format_info['name']} video...", 50)
+            self._ui(f"🎬 Rendering video ({target_duration}s)...", 50)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"output/videos/{content_type}_{format_key}_{timestamp}.mp4"
+            output_path = f"output/videos/{content_type}_{actual_type}_{timestamp}.mp4"
             
             success = renderer.render(
                 processed,
                 output_path,
-                max_images=format_info['scenes'],
+                max_images=len(script),
+                target_duration=target_duration,
                 progress_callback=lambda msg, pct: self._ui(msg, pct)
             )
             
@@ -774,6 +873,36 @@ class NMH03VideoProV3:
         self.root.clipboard_append(text)
         messagebox.showinfo("Copied", "Timestamps copied to clipboard!")
 
+    def _toggle_movie_input_type(self):
+        """Toggle between Movie and Story input"""
+        content_type = self.movie_content_type.get()
+        
+        if content_type == 'story':
+            self.movie_input_help.config(
+                text="Example: 'https://example.com/article', 'https://news-site.com/story'"
+            )
+        else:
+            self.movie_input_help.config(
+                text="Examples: 'https://imdb.com/title/tt123', 'Oppenheimer', 'Avatar 2'"
+            )
+
+    def _update_duration_label(self, value):
+        """Update duration label when slider moves"""
+        seconds = int(float(value))
+        
+        # Determine category
+        if seconds <= 40:
+            category = "Short"
+            icon = "⚡"
+        elif seconds <= 90:
+            category = "Medium"
+            icon = "📹"
+        else:
+            category = "Long"
+            icon = "🎬"
+        
+        self.movie_duration_label.config(text=f"{seconds}s ({icon} {category})")
+
     def _toggle_clipper_source(self):
         """Toggle between URL and file input"""
         source_type = self.clipper_source_type.get()
@@ -833,23 +962,24 @@ class NMH03VideoProV3:
                daemon=True).start()
 
     def _clip_video_worker(self, video_source, source_type, num_clips, clip_format, method):
-        """Worker thread for video clipping"""
+        """Optimized worker thread for video clipping"""
         try:
             from video.clipper import SmartClipper, VideoHighlightDetector
+            import time
             
-            # Format conversion
+            start_time = time.time()
             format_str = 'short' if clip_format == 'short' else 'medium'
             
-            clipper = SmartClipper()
-            
             if source_type == 'url':
-                self._ui("📥 Downloading video from URL...", 20)
+                self._ui("📥 Downloading video...", 20)
                 
-                # Download and clip
+                clipper = SmartClipper()
                 result = clipper.clip_from_url(
                     url=video_source,
                     num_clips=num_clips,
-                    format=format_str
+                    format=format_str,
+                    method=method,
+                    cleanup=True  # Auto-delete temp
                 )
                 
                 if result.get('error'):
@@ -859,29 +989,25 @@ class NMH03VideoProV3:
                 highlights = result.get('highlights', [])
                 
             else:  # local file
-                self._ui("📂 Processing local video file...", 20)
+                self._ui("📂 Loading video...", 20)
                 
-                # Detect highlights
-                self._ui("🔍 Detecting highlights...", 40)
                 detector = VideoHighlightDetector()
                 
-                # Adjust detector settings based on method
-                if method == 'scene':
-                    # Scene change detection would require additional implementation
-                    # For now, use audio peaks
-                    highlights = detector.detect_highlights(video_source, num_clips)
-                else:
-                    highlights = detector.detect_highlights(video_source, num_clips)
-                
-                # Cut clips
-                self._ui("✂️ Cutting clips...", 60)
-                output_dir = "output/clips"
-                clips = detector.auto_clip(
-                    video_path=video_source,
-                    output_dir=output_dir,
-                    num_clips=num_clips,
-                    format=format_str
-                )
+                try:
+                    # Detect
+                    if method == 'semantic':
+                        self._ui("🧠 Understanding content...", 40)
+                    else:
+                        self._ui("🔍 Analyzing audio...", 40)
+                    highlights = detector.detect_highlights(video_source, num_clips, method=method)
+                    
+                    # Cut
+                    self._ui("✂️ Cutting clips...", 60)
+                    output_dir = "output/clips"
+                    clips = detector.auto_clip(video_source, output_dir, num_clips, format_str, method)
+                    
+                finally:
+                    detector.cleanup()  # Always cleanup
             
             if not clips:
                 self._ui("❌ No clips generated", 0)
@@ -890,58 +1016,47 @@ class NMH03VideoProV3:
                 self.root.after(0, show_error)
                 return
             
-            # Build results for display
-            self._ui("📊 Processing results...", 80)
-            results = []
-            for clip_path in clips:
-                # Extract info from filename or use highlights data
-                filename = os.path.basename(clip_path)
-                results.append({
-                    'path': clip_path,
-                    'start': 0,  # Parse from filename if needed
-                    'end': 0,
-                    'duration': 0,
-                    'score': 0.8
-                })
-            
             # Display results
-            self._ui("✅ Displaying results...", 90)
-            self.highlights_text.delete("1.0", tk.END)
-            self.highlights_text.insert(tk.END, f"✅ Generated {len(results)} clips:\n\n")
+            elapsed = time.time() - start_time
+            self._ui("📊 Processing results...", 90)
             
-            for i, clip_info in enumerate(results, 1):
-                clip_path = clip_info['path']
+            self.highlights_text.delete("1.0", tk.END)
+            self.highlights_text.insert(tk.END, 
+                f"✅ Generated {len(clips)} clips in {elapsed:.1f}s:\n\n")
+            
+            for i, (clip_path, highlight) in enumerate(zip(clips, highlights), 1):
                 filename = os.path.basename(clip_path)
+                score = highlight.get('score', 0) * 100
                 self.highlights_text.insert(tk.END, 
                     f"{i}. {filename}\n"
-                    f"   📁 {clip_path}\n\n")
+                    f"   📁 {clip_path}\n"
+                    f"   ⭐ Score: {score:.0f}%\n\n")
             
-            # Show cleanup status
+            # Cleanup status
             if source_type == 'url' and result.get('temp_deleted'):
                 self.highlights_text.insert(tk.END, 
                     "\n🗑️ Temp video cleaned up (saved disk space)\n")
             
-            self._ui(f"✅ Generated {len(results)} clips!", 100)
+            self._ui(f"✅ Done! ({elapsed:.1f}s)", 100)
             
-            # Show success in UI thread
             def show_success():
                 messagebox.showinfo("Success", 
-                                  f"✅ Created {len(results)} clips!\n"
-                                  f"📁 Saved to: output/clips/")
+                    f"✅ Created {len(clips)} clips in {elapsed:.1f}s!\n"
+                    f"📁 Saved to: output/clips/")
             self.root.after(0, show_success)
             
         except ImportError as e:
-            self._ui("❌ Missing dependencies", 0)
             error_msg = str(e)
             is_ytdlp = 'yt_dlp' in error_msg
+            self._ui("❌ Missing dependencies", 0)
             
             def show_error():
                 if is_ytdlp and source_type == 'url':
                     messagebox.showerror("Error", 
-                                       "yt-dlp not installed!\n\n"
-                                       "Install: pip install yt-dlp")
+                        "yt-dlp not installed!\n\n"
+                        "Install: pip install yt-dlp")
                 else:
-                    messagebox.showerror("Error", f"Missing dependency: {error_msg}")
+                    messagebox.showerror("Error", f"Missing: {error_msg}")
             self.root.after(0, show_error)
             
         except Exception as e:
@@ -950,7 +1065,7 @@ class NMH03VideoProV3:
             logger.exception("Clip video failed")
             
             def show_error():
-                messagebox.showerror("Error", f"Failed to clip video:\n{error_msg}")
+                messagebox.showerror("Error", f"Failed:\n{error_msg}")
             self.root.after(0, show_error)
             
         finally:

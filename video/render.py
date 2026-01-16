@@ -68,7 +68,12 @@ class SmartVideoRenderer:
             self.avatar_gen = None
         
         # Initialize script generator based on content type + env
-        if content_type == "movie":
+        if content_type == "story":
+            # Story generator handles narrative
+            from video.story_generator import StoryScriptGenerator
+            self.script_gen = StoryScriptGenerator()
+            logger.info("Using Story script generator")
+        elif content_type == "movie":
             # Use MovieScriptGenerator for movie reviews
             use_llm = os.getenv("OPENAI_API_KEY") is not None
             self.script_gen = MovieScriptGenerator(
@@ -106,11 +111,24 @@ class SmartVideoRenderer:
     # MAIN
     # =========================
 
-    def render(self, data: dict, output_path: str, max_images=5, progress_callback=None):
+    def render(self, data: dict, output_path: str, max_images=None, target_duration=None, progress_callback=None):
+        """
+        Render video to file
+        Args:
+            data: Content data (title, description, etc.)
+            output_path: Where to save video
+            max_images: Max product images to use (None = use all available)
+            target_duration: Target video duration in seconds (optional, for web story mode)
+            progress_callback: Progress callback function
+        """
         title = data.get("title", "")
         desc = data.get("description", "")
         price = data.get("price", "")
-        images = data.get("image_urls", [])[:max_images]
+        
+        # Use ALL available images (don't limit to 5)
+        images = data.get("image_urls", [])
+        if max_images:
+            images = images[:max_images]
 
         logger.info("🎤 Render video: %s", title)
         logger.info("📸 Images available: %d", len(images))
@@ -124,15 +142,22 @@ class SmartVideoRenderer:
         self.person_image_path = data.get("person_image_path")
 
         # Use AI to generate script instead of hardcoded rules
-        script = self.script_gen.generate(title, desc, price)
-
-        logger.info("📝 Script story: %s", script)
+        # BUT: if script already provided (e.g., from StoryScriptGenerator in GUI), use that
+        if "script" in data and data["script"]:
+            script = data["script"]
+            logger.info("📝 Using pre-generated script from GUI")
+        else:
+            script = self.script_gen.generate(title, desc, price)
+            logger.info("📝 Generated script from renderer")
+        
+        logger.info(f"📊 Script has {len(script)} scenes, images available: {len(images)}")
         
         if progress_callback:
             progress_callback(f"Creating {len(script)} scenes...", 20)
 
         clips, audios = [], []
         t = 0
+        total_duration = 0  # Track actual duration
 
         try:
             for idx, text in enumerate(script):
@@ -140,7 +165,11 @@ class SmartVideoRenderer:
                     progress = 20 + (idx + 1) * 60 // len(script)
                     progress_callback(f"Scene {idx+1}/{len(script)}: {text[:50]}...", progress)
                     
+                # Use images in rotation, but ensure we use them all
                 img = images[idx % len(images)] if images else None
+                
+                if img:
+                    logger.info(f"🖼️ Scene {idx+1}: Using image {(idx % len(images)) + 1}/{len(images)}")
 
                 # generate audio first to decide scene duration
                 audio_path = self.tts.tts_to_file(text)
@@ -151,6 +180,8 @@ class SmartVideoRenderer:
                     audios.append(audio.set_start(t))
                 else:
                     duration = 4.0
+                
+                total_duration += duration
 
                 # AI AVATAR MODE: Tạo talking avatar video từ ảnh + audio
                 if self.use_ai_avatar and self.person_image_path and audio_path:
@@ -183,6 +214,9 @@ class SmartVideoRenderer:
 
             if audios:
                 video.audio = CompositeAudioClip(audios)
+            
+            # Log actual duration achieved
+            logger.info(f"📊 Video duration: {total_duration:.1f}s (target: {target_duration if target_duration else 'auto'}s)")
             
             if progress_callback:
                 progress_callback("Encoding video...", 85)
@@ -318,10 +352,20 @@ class SmartVideoRenderer:
     # =========================
 
     def load_image(self, url):
+        """Load image from URL or local file path"""
         try:
+            # Check if it's a local file path
+            if url and os.path.exists(url):
+                logger.info(f"📁 Loading local image: {os.path.basename(url)}")
+                return Image.open(url).convert("RGB")
+            
+            # Otherwise treat as URL
+            logger.info(f"🌐 Downloading image from URL")
             r = requests.get(url, timeout=10)
+            r.raise_for_status()
             return Image.open(BytesIO(r.content)).convert("RGB")
-        except:
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load image: {e}")
             return None
 
     def text_image(self, text):

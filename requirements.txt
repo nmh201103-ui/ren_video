@@ -26,6 +26,7 @@ python-dotenv
 
 # Optional AI / Motion
 elevenlabs
+openai-whisper # optional: semantic highlight (ASR)
 scipy>=1.10.0  # For image filtering in scraper
 gtts>=2.5.0
 requests
