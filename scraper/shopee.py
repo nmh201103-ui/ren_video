@@ -349,7 +349,7 @@ class ShopeeScraper(BaseScraper):
                     if (el) {
                         let text = el.innerText?.trim() || '';
                         // Lấy con số từ text (loại bỏ ₫, dấu phẩy, khoảng trắng)
-                        const nums = text.match(/\d+[\d.,]*\d*/);
+                        const nums = text.match(/\\d+[\\d.,]*\\d*/);
                         if (nums) {
                             return nums[0].replace(/[.,]/g, '');  // '123.456' -> '123456'
                         }

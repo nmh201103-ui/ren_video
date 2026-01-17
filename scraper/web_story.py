@@ -1,4 +1,5 @@
 """Web Story/Article Scraper - Extract content from any webpage"""
+import os
 import re
 import requests
 from bs4 import BeautifulSoup
@@ -10,8 +11,20 @@ class WebStoryCScraper:
     
     def __init__(self):
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
         }
+        # Create session for connection pooling and retry
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
     
     def scrape(self, url: str) -> dict:
         """
@@ -27,21 +40,66 @@ class WebStoryCScraper:
         """
         try:
             from utils.logger import get_logger
+            import time
             logger = get_logger()
             logger.info(f"📖 Scraping web story from: {url}")
             
-            # Fetch page
-            resp = requests.get(url, headers=self.headers, timeout=15)
-            resp.encoding = 'utf-8'
-            resp.raise_for_status()
+            # Fetch page with retry logic
+            max_retries = 3
+            retry_delay = 2
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"🌐 Attempt {attempt + 1}/{max_retries}...")
+                    resp = self.session.get(
+                        url, 
+                        timeout=20,
+                        verify=True,  # Verify SSL
+                        allow_redirects=True
+                    )
+                    resp.encoding = 'utf-8'
+                    resp.raise_for_status()
+                    break  # Success
+                except (requests.exceptions.ConnectionError, 
+                        requests.exceptions.SSLError,
+                        requests.exceptions.Timeout) as conn_err:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (attempt + 1)
+                        logger.warning(f"⚠️ Connection failed: {conn_err}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise  # Re-raise on final attempt
             
             soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Debug: Save HTML if DEBUG env is set
+            if os.getenv("DEBUG_SCRAPER"):
+                debug_file = "debug_scraped.html"
+                with open(debug_file, "w", encoding="utf-8") as f:
+                    f.write(resp.text)
+                logger.info(f"🐛 Debug: Saved HTML to {debug_file}")
             
             # Extract title
             title = self._extract_title(soup)
             
             # Extract main content
             content = self._extract_content(soup)
+            
+            # If content is too short, try Selenium (JavaScript rendering)
+            if not content or len(content.strip()) < 100:
+                logger.warning(f"⚠️ Static scraping got {len(content) if content else 0} chars, trying Selenium...")
+                try:
+                    from scraper.web_story_selenium import scrape_with_selenium
+                    selenium_soup = scrape_with_selenium(url, timeout=30)
+                    if selenium_soup:
+                        # Re-extract with Selenium-rendered content
+                        content = self._extract_content(selenium_soup)
+                        soup = selenium_soup
+                        logger.info(f"✅ Selenium scraped {len(content)} chars")
+                except ImportError:
+                    logger.warning("⚠️ Selenium not installed. Install with: pip install selenium")
+                except Exception as e:
+                    logger.warning(f"⚠️ Selenium failed: {e}")
             
             # Extract description/excerpt
             description = self._extract_description(soup, content)
@@ -53,7 +111,9 @@ class WebStoryCScraper:
             domain = urlparse(url).netloc.replace('www.', '')
             
             if not content or len(content.strip()) < 100:
-                raise ValueError("No meaningful content found in page")
+                logger.warning(f"⚠️ Content still too short: {len(content)} chars")
+                logger.debug(f"HTML title tags: {[t.name for t in soup.find_all(['h1', 'h2', 'h3'])[:5]]}")
+                raise ValueError("No meaningful content found in page. Website may require JavaScript rendering. Try installing: pip install selenium")
             
             logger.info(f"✅ Extracted: {title[:50]}... ({len(content)} chars)")
             
@@ -122,28 +182,73 @@ class WebStoryCScraper:
     
     def _extract_content(self, soup) -> str:
         """Extract main article text"""
+        from utils.logger import get_logger
+        logger = get_logger()
+        
         # Remove script and style
-        for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
+        for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'noscript']):
             tag.decompose()
         
-        # Try common article containers
+        # Try common article containers (expanded list)
         content = None
         
-        for selector in ['article', '[role="main"]', '.post-content', '.entry-content', 
-                         '.article-content', '.content', 'main']:
+        selectors = [
+            'article', 
+            '[role="main"]', 
+            '.post-content', 
+            '.entry-content', 
+            '.article-content', 
+            '.article-body',
+            '.content', 
+            '.story-content',
+            '.post-body',
+            '#content',
+            '#article',
+            'main',
+            '.detail-content',  # ybox.vn specific
+            '.article-detail',
+            '[itemprop="articleBody"]',
+            '.text-content'
+        ]
+        
+        for selector in selectors:
             container = soup.select_one(selector)
             if container:
                 content = self._extract_text_from_container(container)
-                if len(content) > 500:
+                if len(content) > 300:
+                    logger.info(f"✅ Found content in selector: {selector}")
                     break
         
-        # Fallback: get all paragraphs
-        if not content or len(content) < 500:
+        # Fallback 1: get all paragraphs
+        if not content or len(content) < 300:
+            logger.warning("⚠️ No container found, trying paragraphs...")
             paragraphs = soup.find_all('p')
-            content = '\n\n'.join([p.get_text(strip=True) for p in paragraphs])
+            content = '\n\n'.join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+        
+        # Fallback 2: get all divs with text
+        if not content or len(content) < 300:
+            logger.warning("⚠️ Paragraphs insufficient, trying all divs...")
+            all_divs = soup.find_all('div')
+            texts = []
+            for div in all_divs:
+                # Skip if div has too many children (likely container)
+                if len(div.find_all()) < 3:
+                    text = div.get_text(strip=True)
+                    if len(text) > 50 and len(text) < 500:  # Reasonable paragraph length
+                        texts.append(text)
+            content = '\n\n'.join(texts)
+        
+        # Fallback 3: Get entire body text (last resort)
+        if not content or len(content) < 200:
+            logger.warning("⚠️ All methods failed, extracting body text...")
+            body = soup.find('body')
+            if body:
+                content = body.get_text(separator='\n', strip=True)
         
         # Clean up
         content = self._clean_text(content)
+        
+        logger.info(f"📊 Extracted {len(content)} chars, {len(content.split())} words")
         
         return content[:5000]  # Limit to 5000 chars
     

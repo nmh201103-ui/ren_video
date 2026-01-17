@@ -81,6 +81,10 @@ class SmartVideoRenderer:
                 api_key=os.getenv("OPENAI_API_KEY")
             )
             logger.info("Using Movie script generator")
+        elif content_type == "video":
+            # Video scene render uses pre-generated script; keep a lightweight fallback
+            self.script_gen = HeuristicScriptGenerator()
+            logger.info("Using heuristic script generator (video mode fallback)")
         else:
             # Use product script generator
             provider = os.getenv("LLM_PROVIDER", "default").lower()
@@ -124,6 +128,10 @@ class SmartVideoRenderer:
         title = data.get("title", "")
         desc = data.get("description", "")
         price = data.get("price", "")
+
+        # If we are rendering from original video scenes, use dedicated path
+        if self.content_type == "video" or data.get("video_path"):
+            return self._render_video_with_scenes(data, output_path, progress_callback)
         
         # Use ALL available images (don't limit to 5)
         images = data.get("image_urls", [])
@@ -250,6 +258,92 @@ class SmartVideoRenderer:
 
         self.cleanup()
         return True
+
+    def _render_video_with_scenes(self, data: dict, output_path: str, progress_callback=None):
+        """Render using original video scenes + generated voice-over."""
+        try:
+            video_path = data.get("video_path")
+            scenes = data.get("scenes", [])
+            script_items = data.get("script", [])
+
+            if not video_path or not os.path.exists(video_path):
+                raise ValueError("video_path missing or not found")
+            if not scenes or not script_items:
+                raise ValueError("Scenes or script missing for video render")
+
+            base_clip = VideoFileClip(video_path)
+            clips, audios = [], []
+            t = 0
+
+            total = min(len(scenes), len(script_items))
+
+            for idx in range(total):
+                scene = scenes[idx]
+                text_item = script_items[idx]
+                narration = text_item.get("text", text_item if isinstance(text_item, str) else "")
+                scene_start = float(scene.get("start", 0))
+                scene_end = float(scene.get("end", scene_start + scene.get("duration", 3)))
+                scene_dur = max(1.0, scene_end - scene_start)
+
+                if progress_callback:
+                    progress = 20 + (idx + 1) * 60 // max(1, total)
+                    progress_callback(f"Scene {idx+1}/{total}: voice-over", progress)
+
+                # Generate narration audio
+                audio_path = self.tts.tts_to_file(narration)
+                if audio_path:
+                    self.temp_files.append(audio_path)
+                audio_clip = AudioFileClip(audio_path) if audio_path and os.path.exists(audio_path) else None
+                audio_dur = audio_clip.duration if audio_clip else 0
+
+                desired_dur = max(scene_dur, audio_dur + 0.3)
+
+                # Extract original scene
+                sub = base_clip.subclip(scene_start, min(scene_end, base_clip.duration))
+
+                # If narration longer than scene, freeze last frame to pad
+                if desired_dur > sub.duration:
+                    pad = desired_dur - sub.duration
+                    sub = sub.fx(vfx.freeze, t=sub.duration - 0.05, freeze_duration=pad)
+                else:
+                    sub = sub.set_duration(desired_dur)
+
+                if audio_clip:
+                    audios.append(audio_clip.set_start(t))
+
+                clips.append(sub.set_start(t))
+                t += desired_dur
+
+            video = CompositeVideoClip(clips, size=(self.template["width"], self.template["height"]))
+            if audios:
+                video.audio = CompositeAudioClip(audios)
+
+            if progress_callback:
+                progress_callback("Encoding video...", 90)
+
+            video.write_videofile(
+                output_path,
+                fps=self.template["fps"],
+                codec="libx264",
+                audio_codec="aac",
+                bitrate="8000k",
+                audio_bitrate="320k",
+                preset="slow",
+                ffmpeg_params=["-crf", "18", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.2", "-movflags", "+faststart"],
+                logger=None,
+            )
+
+            if progress_callback:
+                progress_callback("Video complete!", 100)
+
+            return True
+
+        except Exception as e:
+            logger.exception("Video scene render failed: %s", e)
+            self.cleanup()
+            return False
+        finally:
+            self.cleanup()
 
     def _create_avatar_scene(self, image_path, audio_path, scene_idx, progress_callback=None):
         """Create AI talking avatar video using Wav2Lip/D-ID"""

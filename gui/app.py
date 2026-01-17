@@ -79,6 +79,24 @@ class VideoCreatorApp:
         settings_inner = tk.Frame(settings_scroll, bg="#252836")
         settings_scroll.create_window((0, 0), window=settings_inner, anchor="nw")
         
+        # Store reference for scrolling
+        self.settings_scroll = settings_scroll
+        self.left_panel = left
+        
+        # Smooth mousewheel scrolling - works when mouse is over left panel
+        def _on_mousewheel(event):
+            self.settings_scroll.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        # Bind mousewheel to left panel and all its children
+        def _bind_to_mousewheel(widget):
+            """Recursively bind mousewheel to widget and its children"""
+            widget.bind("<MouseWheel>", _on_mousewheel)
+            for child in widget.winfo_children():
+                _bind_to_mousewheel(child)
+        
+        # Bind to left panel (settings area)
+        _bind_to_mousewheel(left)
+        
         # Quick Actions
         self._add_section(settings_inner, "⚡ Quick Presets")
         quick_frame = tk.Frame(settings_inner, bg="#252836")
@@ -231,6 +249,17 @@ class VideoCreatorApp:
         # Update scroll region
         settings_inner.update_idletasks()
         settings_scroll.configure(scrollregion=settings_scroll.bbox("all"))
+        
+        # Re-bind mousewheel after all widgets are created
+        def _on_mousewheel(event):
+            self.settings_scroll.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        def _bind_to_mousewheel(widget):
+            widget.bind("<MouseWheel>", _on_mousewheel)
+            for child in widget.winfo_children():
+                _bind_to_mousewheel(child)
+        
+        _bind_to_mousewheel(self.left_panel)
         
         # === RIGHT: ACTIONS & PREVIEW ===
         # Generate Button
@@ -449,10 +478,11 @@ class VideoCreatorApp:
                 
         except Exception as e:
             logger.exception("Video creation failed")
-            self._ui(f"❌ Error: {str(e)}", 0)
-            self.root.after(100, lambda: messagebox.showerror(
+            error_msg = str(e)  # Capture error message
+            self._ui(f"❌ Error: {error_msg}", 0)
+            self.root.after(100, lambda msg=error_msg: messagebox.showerror(
                 "Error",
-                f"Failed: {str(e)}"
+                f"Failed: {msg}"
             ))
         finally:
             self.is_processing = False

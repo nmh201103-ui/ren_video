@@ -330,19 +330,29 @@ class VideoHighlightDetector:
             return False
     
     def auto_clip(self, video_path: str, output_dir: str, 
-                  num_clips: int = 5, format: str = 'short', method: str = "audio") -> List[str]:
+                  num_clips: int = 5, format: str = 'short', method: str = "audio", clip_duration: int = None) -> List[str]:
         """
         Complete workflow: detect + cut
+        Args:
+            clip_duration: Custom clip duration in seconds (overrides format)
         """
         os.makedirs(output_dir, exist_ok=True)
         
-        # Adjust durations based on format
-        if format == 'short':
-            self.max_clip_duration = 30
-            self.min_clip_duration = 15
-        elif format == 'medium':
-            self.max_clip_duration = 60
-            self.min_clip_duration = 30
+        # Use custom duration if provided, otherwise use format
+        if clip_duration is not None:
+            self.max_clip_duration = clip_duration
+            self.min_clip_duration = max(10, clip_duration - 10)  # Minimum 10s
+        else:
+            # Adjust durations based on format
+            if format == 'short':
+                self.max_clip_duration = 30
+                self.min_clip_duration = 15
+            elif format == 'medium':
+                self.max_clip_duration = 60
+                self.min_clip_duration = 30
+            else:  # long
+                self.max_clip_duration = 180
+                self.min_clip_duration = 60
         
         # Detect once
         highlights = self.detect_highlights(video_path, num_clips, method=method)
@@ -375,9 +385,11 @@ class SmartClipper:
         self.detector = VideoHighlightDetector()
     
     def clip_from_url(self, url: str, num_clips: int = 5, 
-                     format: str = 'short', cleanup: bool = True, method: str = "audio") -> Dict:
+                     format: str = 'short', cleanup: bool = True, method: str = "audio", clip_duration: int = None) -> Dict:
         """
         Download → Detect → Clip → Cleanup
+        Args:
+            clip_duration: Custom clip duration in seconds (overrides format)
         """
         from video.downloader import VideoDownloader
         import os
@@ -392,9 +404,9 @@ class SmartClipper:
             # Detect
             highlights = self.detector.detect_highlights(video_path, num_clips, method=method)
             
-            # Cut
+            # Cut with custom duration
             output_dir = "output/clips"
-            clips = self.detector.auto_clip(video_path, output_dir, num_clips, format, method)
+            clips = self.detector.auto_clip(video_path, output_dir, num_clips, format, method, clip_duration=clip_duration)
             
             result = {
                 'clips': clips,
