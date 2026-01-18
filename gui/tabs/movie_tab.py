@@ -535,7 +535,9 @@ class MovieReviewTab:
             
                 if actual_type == "story":
                     from video.story_generator import StoryScriptGenerator
-                    story_gen = StoryScriptGenerator()
+                    # Try Gemma 3.4B model (better quality than 2B)
+                    # If still generates trash, change to: StoryScriptGenerator(use_llm=None)
+                    story_gen = StoryScriptGenerator()  # Auto-detect: will use Ollama gemma3:4b
                     script = story_gen.generate(
                         processed['title'],
                         processed.get('description', ''),
@@ -550,9 +552,36 @@ class MovieReviewTab:
                         processed.get('price', '')
                     )
                 
+                # ✅ AUTO-DOWNLOAD ĐỦ ẢNH TRƯỚC KHI EXPAND SCRIPT
+                # Đảm bảo mỗi scene có 1 ảnh (dùng text gốc, chưa có elaboration)
+                current_images = processed.get('image_urls', [])
+                if len(current_images) < len(script):
+                    logger.info(f"🔍 Pre-downloading images: {len(current_images)} → {len(script)} scenes")
+                    from video.image_searcher import ImageSearcher
+                    searcher = ImageSearcher()
+                    for scene_idx in range(len(current_images) + 1, len(script) + 1):
+                        scene_text = script[scene_idx - 1]
+                        query = " ".join(scene_text.split()[:15])  # Use original scene text
+                        paths = searcher.search_google_images(query, num_images=1, output_dir="assets/temp/web_story_images", index=scene_idx)
+                        if paths:
+                            current_images.extend(paths)
+                            logger.info(f"✅ Scene {scene_idx}: Downloaded image")
+                        else:
+                            # Fallback placeholder
+                            placeholder = [f"https://picsum.photos/1080/1920?random={scene_idx}"]
+                            paths = searcher._download_batch(placeholder, "assets/temp/web_story_images", scene_idx)
+                            if paths:
+                                current_images.extend(paths)
+                    processed['image_urls'] = current_images
+                    logger.info(f"✅ Images ready: {len(current_images)} for {len(script)} scenes")
+                
+                # Optimize script duration (expand/compress)
                 from video.script_optimizer import ScriptDurationOptimizer
                 optimizer = ScriptDurationOptimizer()
                 script = optimizer.optimize(script[:num_scenes], target_duration)
+                logger.info(f"✅ GUI: Final script after optimization ({len(script)} scenes)")
+                for i, s in enumerate(script[:10], 1):
+                    logger.info(f"   [{i}] {s[:80]}...")
                 processed["script"] = script
             else:
                 # For video type, script already generated in scene analysis

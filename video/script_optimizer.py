@@ -21,7 +21,7 @@ class ScriptDurationOptimizer:
         Returns:
             Optimized script that fits duration
         """
-        if not script:
+        if not script or not target_duration:
             return script
         
         # Calculate current estimated duration
@@ -29,13 +29,19 @@ class ScriptDurationOptimizer:
         
         logger.info(f"📊 Script duration: {current_duration:.1f}s → Target: {target_duration}s")
         
-        # If within 10% tolerance, keep as-is
-        tolerance = target_duration * 0.1
+        # If within 15% tolerance, keep as-is
+        tolerance = target_duration * 0.15
         if abs(current_duration - target_duration) <= tolerance:
             logger.info("✅ Script duration acceptable, no optimization needed")
             return script
         
-        # Enforce total words budget across scenes for tighter control
+        # Too short: expand by elaborating
+        if current_duration < target_duration:
+            logger.info(f"📈 Script too short ({current_duration:.1f}s < {target_duration}s), expanding...")
+            return self._expand(script, target_duration)
+        
+        # Too long: fit to budget
+        logger.info(f"📉 Script too long ({current_duration:.1f}s > {target_duration}s), trimming...")
         max_total_words = max(1, int(target_duration * self.words_per_second))
         return self._fit_to_budget(script, max_total_words)
     
@@ -79,24 +85,45 @@ class ScriptDurationOptimizer:
         
         final_duration = self._estimate_duration(fitted)
         logger.info(f"✅ Fitted total ~{final_duration:.1f}s with budget {max_total_words} words")
+        logger.info(f"📝 Optimized script ({len(fitted)} scenes):")
+        for i, scene in enumerate(fitted, 1):
+            logger.info(f"   [{i}] {scene[:80]}...")
         return fitted
     
     def _expand(self, script: list, target_duration: int) -> list:
-        """Expand script to fill longer duration by adding brief transitions."""
+        """Expand script by elaborating on existing scenes (append details to each scene, not insert)."""
         logger.info(f"📝 Expanding script to {target_duration}s")
         max_total_words = int(target_duration * self.words_per_second)
         current_words = sum(len(s.split()) for s in script)
         if current_words >= max_total_words:
             return script
-        transitions = [
-            "Và đây là điều quan trọng...",
-            "Điều này cho thấy...",
-            "Thật thú vị...",
-            "Ngoài ra...",
-        ]
+        
         expanded = []
+        words_needed = max_total_words - current_words
+        words_per_scene = max(5, words_needed // len(script)) if script else 0
+        
+        elaborations = [
+            "Điều này có thể giúp bạn hiểu rõ hơn về vấn đề.",
+            "Hãy suy ngẫm về ý nghĩa của điều này trong cuộc sống hàng ngày.",
+            "Bạn có thể áp dụng kiến thức này ngay bây giờ.",
+            "Đây là một khám phá thú vị mà nhiều người chưa biết.",
+            "Hãy tìm hiểu sâu hơn để có cái nhìn toàn diện.",
+            "Điều này sẽ thay đổi cách bạn nhìn nhận vấn đề.",
+        ]
+        
         for i, text in enumerate(script):
-            expanded.append(text)
-            if 0 < i < len(script) - 1 and sum(len(s.split()) for s in expanded) < max_total_words:
-                expanded.append(transitions[i % len(transitions)])
+            expanded_text = text
+            # Append elaboration to each scene (except last)
+            if i < len(script) - 1 and words_needed > 0:
+                import random
+                elaboration = random.choice(elaborations)
+                expanded_text = f"{text} {elaboration}"
+                words_needed -= len(elaboration.split())
+            expanded.append(expanded_text)
+        
+        final_duration = self._estimate_duration(expanded)
+        logger.info(f"✅ Expanded total ~{final_duration:.1f}s (appended elaborations to {len(script)} scenes)")
+        logger.info(f"📝 Optimized script ({len(expanded)} scenes):")
+        for i, scene in enumerate(expanded, 1):
+            logger.info(f"   [{i}] {scene[:80]}...")
         return expanded

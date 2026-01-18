@@ -57,9 +57,14 @@ class ImageSearcher:
             from bing_image_downloader import downloader
             import shutil
             
+            # Sanitize query to avoid invalid Windows path characters and overly long names
+            safe_query = self._sanitize_query(query)
             logger.info(f"📸 Bing Images: {query}")
+            if safe_query != query:
+                logger.info(f"   ↳ Sanitized for filesystem: {safe_query}")
+
             downloader.download(
-                query,
+                safe_query,
                 limit=num_images,
                 output_dir="dataset",
                 adult_filter_off=True,
@@ -70,13 +75,25 @@ class ImageSearcher:
             )
             
             # Find downloaded images
-            dataset_path = os.path.join("dataset", query.replace(" ", "_"))
+            dataset_path = os.path.join("dataset", safe_query.replace(" ", "_"))
             if not os.path.exists(dataset_path):
-                # Try finding folder by first word
+                # Try finding folder by first word of sanitized query
+                first_word = safe_query.split()[0].lower() if safe_query.split() else ""
                 for folder in os.listdir("dataset") if os.path.exists("dataset") else []:
-                    if folder.lower().startswith(query.split()[0].lower()):
+                    if folder.lower().startswith(first_word):
                         dataset_path = os.path.join("dataset", folder)
                         break
+                # Fallback: pick most recently modified folder
+                if not os.path.exists(dataset_path) and os.path.exists("dataset"):
+                    try:
+                        folders = [os.path.join("dataset", f) for f in os.listdir("dataset")]
+                        folders = [f for f in folders if os.path.isdir(f)]
+                        if folders:
+                            latest = max(folders, key=lambda p: os.path.getmtime(p))
+                            dataset_path = latest
+                            logger.info(f"   ↳ Using latest dataset folder: {os.path.basename(latest)}")
+                    except Exception:
+                        pass
             
             if os.path.exists(dataset_path):
                 images = [f for f in os.listdir(dataset_path) if f.endswith(('.jpg', '.png', '.jpeg'))][:num_images]
@@ -92,8 +109,8 @@ class ImageSearcher:
                     return downloaded
             
             # Retry with shorter query
-            if len(query.split()) > 3:
-                short_query = ' '.join(query.split()[:3])
+            if len(safe_query.split()) > 3:
+                short_query = ' '.join(safe_query.split()[:3])
                 logger.info(f"🔄 Retry with: {short_query}")
                 return self._try_bing(short_query, num_images, output_dir, start_index)
                 
@@ -103,6 +120,26 @@ class ImageSearcher:
             logger.error(f"❌ Bing failed: {type(e).__name__}: {e}")
         
         return []
+
+    def _sanitize_query(self, query: str) -> str:
+        """Make query safe for Windows filesystem and Bing downloader.
+        - Remove invalid path chars: <>:"/\|?*
+        - Trim punctuation at ends
+        - Collapse whitespace
+        - Limit to first 6 words to avoid very long folder names
+        """
+        # Remove invalid filesystem characters
+        safe = re.sub(r'[<>:"/\\|?*]+', ' ', query)
+        # Remove excessive punctuation
+        safe = re.sub(r'\s+[.,;:!?]+', ' ', safe)
+        safe = re.sub(r'^[.,;:!?]+|[.,;:!?]+$', '', safe).strip()
+        # Collapse whitespace
+        safe = re.sub(r'\s+', ' ', safe)
+        # Limit length by words
+        parts = safe.split()
+        if len(parts) > 6:
+            safe = ' '.join(parts[:6])
+        return safe
     
     def _search_pexels(self, keyword: str, num_images: int) -> List[str]:
         """Search Pexels API for free stock photos (200 requests/hour)"""

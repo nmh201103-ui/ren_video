@@ -153,12 +153,47 @@ class SmartVideoRenderer:
         # BUT: if script already provided (e.g., from StoryScriptGenerator in GUI), use that
         if "script" in data and data["script"]:
             script = data["script"]
-            logger.info("📝 Using pre-generated script from GUI")
+            logger.info(f"📝 Using pre-generated script from GUI ({len(script)} scenes)")
+            logger.info("✅ Renderer will NOT regenerate script, using GUI's optimized version")
         else:
             script = self.script_gen.generate(title, desc, price)
-            logger.info("📝 Generated script from renderer")
-        
+            logger.info(f"📝 Generated NEW script from renderer ({len(script)} scenes)")
+            logger.warning("⚠️ Script was regenerated in renderer (GUI did not provide script)")
+
+        # Ensure we have at least one image per scene
         logger.info(f"📊 Script has {len(script)} scenes, images available: {len(images)}")
+        logger.info(f"📝 Final render script ({len(script)} scenes):")
+        for i, scene in enumerate(script[:15], 1):  # Log first 15 scenes
+            logger.info(f"   [{i}] {scene[:100]}...")
+        try:
+            if script and len(images) < len(script):
+                from video.image_searcher import ImageSearcher, extract_keywords
+                searcher = ImageSearcher()
+                needed = len(script) - len(images)
+                logger.info(f"🔍 Need {needed} more images to match scenes, auto-searching...")
+                for scene_idx in range(len(images) + 1, len(script) + 1):
+                    text = script[scene_idx - 1]
+                    query = " ".join(text.split()[:15])
+                    # Try Google/Bing image for the scene
+                    paths = searcher.search_google_images(query, num_images=1, output_dir="assets/temp/web_story_images", index=scene_idx)
+                    if paths:
+                        images.extend(paths)
+                        continue
+                    # Fallback with concept keywords
+                    keywords = extract_keywords(title, desc, text)
+                    keyword_str = " ".join(keywords[:2])
+                    paths = searcher.search_and_download(keyword_str, num_images=1, output_dir="assets/temp/web_story_images", start_index=scene_idx)
+                    if paths:
+                        images.extend(paths)
+                        continue
+                    # Final placeholder
+                    placeholder = [f"https://picsum.photos/1080/1920?random={scene_idx}"]
+                    paths = searcher._download_batch(placeholder, "assets/temp/web_story_images", scene_idx)
+                    if paths:
+                        images.extend(paths)
+                logger.info(f"✅ Images prepared: {len(images)} for {len(script)} scenes")
+        except Exception as e:
+            logger.warning(f"⚠️ Auto image augmentation failed: {e}")
         
         if progress_callback:
             progress_callback(f"Creating {len(script)} scenes...", 20)
@@ -168,16 +203,25 @@ class SmartVideoRenderer:
         total_duration = 0  # Track actual duration
 
         try:
+            # Ensure images align one-to-one with scenes
+            if images and len(images) >= len(script):
+                images = images[:len(script)]
+
             for idx, text in enumerate(script):
                 if progress_callback:
                     progress = 20 + (idx + 1) * 60 // len(script)
                     progress_callback(f"Scene {idx+1}/{len(script)}: {text[:50]}...", progress)
                     
-                # Use images in rotation, but ensure we use them all
-                img = images[idx % len(images)] if images else None
-                
-                if img:
-                    logger.info(f"🖼️ Scene {idx+1}: Using image {(idx % len(images)) + 1}/{len(images)}")
+                # Map image to scene deterministically
+                if images:
+                    if len(images) >= len(script):
+                        img = images[idx]
+                        logger.info(f"🖼️ Scene {idx+1}: Using image {idx+1}/{len(images)}")
+                    else:
+                        img = images[idx % len(images)]
+                        logger.info(f"🖼️ Scene {idx+1}: Using image {(idx % len(images)) + 1}/{len(images)} (rotated)")
+                else:
+                    img = None
 
                 # generate audio first to decide scene duration
                 audio_path = self.tts.tts_to_file(text)
@@ -218,13 +262,16 @@ class SmartVideoRenderer:
                 clips.append(clip.set_start(t))
                 t += duration
 
+            # Sort by start time to avoid any ordering glitches
+            clips_sorted = sorted(clips, key=lambda c: getattr(c, 'start', 0))
             video = CompositeVideoClip(
-                clips,
+                clips_sorted,
                 size=(self.template["width"], self.template["height"])
             )
 
             if audios:
-                video.audio = CompositeAudioClip(audios)
+                audios_sorted = sorted(audios, key=lambda a: getattr(a, 'start', 0))
+                video.audio = CompositeAudioClip(audios_sorted)
             
             # Log actual duration achieved
             logger.info(f"📊 Video duration: {total_duration:.1f}s (target: {target_duration if target_duration else 'auto'}s)")

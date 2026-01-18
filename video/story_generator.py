@@ -10,13 +10,13 @@ logger = get_logger()
 class StoryScriptGenerator:
     """Generate storytelling narrative scripts from article content"""
     
-    def __init__(self, use_llm=None):
+    def __init__(self, use_llm="auto"):
         """
         Args:
-            use_llm: "openai", "ollama", or None for heuristic
+            use_llm: "openai", "ollama", None (force heuristic), or "auto" (detect)
         """
-        # Auto-detect LLM based on environment
-        if use_llm is None:
+        # Auto-detect LLM based on environment ONLY if use_llm == "auto"
+        if use_llm == "auto":
             if os.getenv("OPENAI_API_KEY"):
                 self.use_llm = "openai"
             elif self._has_ollama():
@@ -172,7 +172,7 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
     Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, không thêm text."""
 
         try:
-            model = os.getenv("OLLAMA_MODEL", "gemma2:2b")
+            model = os.getenv("OLLAMA_MODEL", "gemma3:4b")  # Using Gemma 3.4B for better quality
             timeout = int(os.getenv("OLLAMA_TIMEOUT", "180"))  # Increase timeout for longer content
             
             logger.info(f"🤖 Ollama: Using model {model}, timeout {timeout}s")
@@ -335,8 +335,10 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
                         if len(paragraphs) > 1:
                             content = '\n\n'.join(paragraphs[1:])
         
-        # Split content into logical chunks
-        chunks = self._split_content(content, max_scenes - 3)  # Leave room for intro + summary + conclusion
+        # Split content into logical chunks (smaller chunks for more scenes, easier to expand)
+        # Use max_scenes - 2 to leave room for intro + conclusion
+        target_chunks = max(3, (max_scenes - 2) if max_scenes else 6)
+        chunks = self._split_content(content, target_chunks)
         
         # Allocate per-scene word budgets (intro + middle + summary + conclusion)
         per_scene_targets = None
