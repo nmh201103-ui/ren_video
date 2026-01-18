@@ -74,7 +74,7 @@ class ContentProcessor:
                 continue
             # keep marketing-like short paragraphs
             keep.append(' '.join(p.split()))
-        return '\n'.join(keep)[:2000]
+        return '\n'.join(keep)  # No length limit - let full content flow for scene generation
     
     def _clean_title(self, title: str) -> str:
         title = re.sub(r'<[^>]+>', '', title)

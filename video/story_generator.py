@@ -105,8 +105,8 @@ class StoryScriptGenerator:
     
     def _generate_with_openai(self, title: str, description: str, content: str, max_scenes: int) -> list:
         """Use OpenAI to create engaging narrative"""
-        # Summarize for OpenAI too (though it has larger context)
-        summarized_content = self._summarize_content(content, max_words=1200)
+        # Use full content for better scene variety (no truncation for story mode)
+        summarized_content = self._summarize_content(content, max_words=None)
         
         prompt = f"""Tạo kịch bản video kể chuyện từ bài viết sau (THUẦN TÚY KỂ CHUYỆN, KHÔNG QUẢNG CÁO):
 
@@ -118,18 +118,19 @@ QUY TẮC QUAN TRỌNG:
 - Tuyệt đối CHỈ sử dụng thông tin từ nội dung bài viết trên
 - KHÔNG được thêm sự kiện, con số, ví dụ, hoặc chi tiết NGOÀI bài gốc
 - KHÔNG tự sáng tạo nội dung không có trong bài viết
-- Nếu bài viết nói về "A", đừng thêm "B, C, D" vào kịch bản
+- BẮT BUỘC: MỖI TOPIC PHẢI INTERLEAVE (hook + chi tiết liền tiếp), KHÔNG gom hết hooks rồi mới chi tiết
+- Ví dụ: Hook topic A → Chi tiết topic A → Hook topic B → Chi tiết topic B → ...
 
 Yêu cầu:
-1. Tạo {max_scenes} đoạn kịch bản (mỗi đoạn ~20-30 giây khi đọc):
-   - Đoạn 1: Hook/Mở đầu thu hút - chỉ dùng thông tin từ bài viết
-   - Đoạn 2-{max_scenes-2}: Nội dung chính (kể chuyện tự nhiên) - dựa HOÀN TOÀN vào bài gốc
-   - Đoạn {max_scenes-1}: Tóm tắt điểm chính + lời khuyên áp dụng - rút ra từ nội dung bài viết
-   - Đoạn {max_scenes}: Kết luận truyền cảm hứng (cảm ơn + lời khuyên sâu sắc) - liên quan trực tiếp đến chủ đề bài viết
+1. Tạo {max_scenes} đoạn kịch bản (mỗi đoạn ~20-30 giây khi đọc) với cấu trúc INTERLEAVE:
+   - Lẻ (1,3,5,...): Hook từng chủ đề + bắt đầu chi tiết
+   - Chẵn (2,4,6,...): Tiếp tục chi tiết + mở rộng ý kiến
+   - Đoạn {max_scenes-1}: Tóm tắt tất cả + lời khuyên áp dụng chung
+   - Đoạn {max_scenes}: Kết luận truyền cảm hứng (cảm ơn + insight cuối cùng)
 
-2. Giọng điệu: Tự nhiên, gần gũi, như người kể chuyện cho bạn nghe
+2. Giọng điệu: Tự nhiên, gần gũi, như người kể chuyện
 3. KHÔNG quảng cáo sản phẩm, KHÔNG call-to-action
-4. Tập trung vào nội dung câu chuyện/bài học + cách áp dụng vào cuộc sống
+4. Tập trung vào nội dung câu chuyện/bài học + áp dụng cuộc sống
 
 Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ trả JSON, không giải thích."""
 
@@ -145,8 +146,8 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
     
     def _generate_with_ollama(self, title: str, description: str, content: str, max_scenes: int) -> list:
         """Use Ollama to create engaging narrative"""
-        # Smart content summarization to fit Ollama context
-        summarized_content = self._summarize_content(content, max_words=800)
+        # Use full content to prevent scene repetition (no max_words limit)
+        summarized_content = self._summarize_content(content, max_words=None)  # Full content
         
         prompt = f"""Tạo kịch bản video storytelling từ bài viết (KHÔNG QUẢNG CÁO):
 
@@ -157,13 +158,18 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
     - Tuyệt đối CHỈ sử dụng thông tin từ nội dung bài viết trên
     - KHÔNG được thêm sự kiện, con số, ví dụ, hoặc chi tiết NGOÀI bài gốc
     - KHÔNG tự sáng tạo nội dung không có trong bài viết
-    - Nếu bài viết nói về "A", đừng thêm "B, C, D" vào kịch bản
+    - Bắt buộc: Mỗi topic/ý chính phải có 1 hook riêng rồi mới kể chi tiết ngay sau đó (KHÔNG đưa tất cả hooks trước)
+    - Interleave: Hook topic A → Chi tiết topic A → Hook topic B → Chi tiết topic B → ...
 
-    Tạo {max_scenes} đoạn kịch bản (mỗi đoạn ~20 giây):
-    1. Hook/Mở đầu thu hút - chỉ dùng thông tin từ bài viết
-    2-{max_scenes-2}. Kể chuyện nội dung - dựa HOÀN TOÀN vào bài gốc
-    {max_scenes-1}. Tóm tắt + lời khuyên áp dụng - rút ra từ nội dung bài viết
-    {max_scenes}. Kết luận truyền cảm hứng (cảm ơn + insight) - liên quan trực tiếp đến chủ đề bài viết
+    Tạo {max_scenes} đoạn kịch bản (mỗi đoạn ~20 giây), MỖI TOPIC PHẢI LÀ: HOOK + CHI TIẾT LIỀN TIẾP:
+    
+    Ví dụ cấu trúc (nếu 6 scenes):
+    1. Hook chủ đề 1 (câu mở đầu với chi tiết chủ đề 1)
+    2. Chi tiết + phân tích chủ đề 1 (tiếp tục từ scene 1)
+    3. Hook chủ đề 2 (câu mở đầu với chi tiết chủ đề 2)
+    4. Chi tiết + phân tích chủ đề 2 (tiếp tục từ scene 3)
+    5. Tóm tắt tất cả các chủ đề + lời khuyên áp dụng
+    6. Kết luận truyền cảm hứng (cảm ơn + insight chung)
 
     Chỉ kể chuyện/chia sẻ kiến thức, KHÔNG quảng cáo, KHÔNG bán hàng.
     Giọng điệu tự nhiên, như người kể chuyện.
@@ -173,7 +179,7 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
 
         try:
             model = os.getenv("OLLAMA_MODEL", "gemma3:4b")  # Using Gemma 3.4B for better quality
-            timeout = int(os.getenv("OLLAMA_TIMEOUT", "180"))  # Increase timeout for longer content
+            timeout = int(os.getenv("OLLAMA_TIMEOUT", "300"))  # Increase timeout to 300s for full content processing
             
             logger.info(f"🤖 Ollama: Using model {model}, timeout {timeout}s")
             
@@ -256,11 +262,15 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
             logger.exception("Full traceback:")
             return None
     
-    def _summarize_content(self, content: str, max_words: int = 800) -> str:
+    def _summarize_content(self, content: str, max_words: int = None) -> str:
         """
-        Smart content summarization to fit LLM context limits
-        Instead of truncating, extract key paragraphs
+        Return full content without truncation to prevent scene repetition.
+        Ollama with full context will generate more diverse scenes.
         """
+        # If max_words is None (story mode), return complete content
+        if max_words is None:
+            return content
+        
         # Split into paragraphs
         paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
         
@@ -349,10 +359,11 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
             total_weight = sum(weights)
             per_scene_targets = [max(6, int(total_words_budget * (w / total_weight))) for w in weights]
         
-        # Create pure narrative arc (no CTA, no product pitch)
+        # Create pure narrative arc with INTERLEAVED structure (hook + detail per topic)
+        # NOT: all hooks first, then all details
         script = []
         
-        # Scene 1: Hook/Introduction - but avoid duplication
+        # Scene 1: Hook/Introduction
         intro = self._build_hook(title, description)
         
         # Check if intro is too similar to first chunk (avoid duplication)
@@ -370,17 +381,21 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
             intro = self._limit_words(intro, per_scene_targets[0])
         script.append(intro)
         
-        # Scenes 2-N: Main content (pure storytelling)
+        # INTERLEAVED STRUCTURE: Cho mỗi chunk, tạo HOOK + CHI TIẾT (không phải tất cả hooks trước)
+        # Ví dụ: Hook topic 1 + bắt đầu detail → Chi tiết tiếp tục topic 1 → Hook topic 2 + detail → ...
         for i, chunk in enumerate(chunks, 1):
-            limit = None
-            if per_scene_targets and i < len(per_scene_targets) - 2:
-                limit = per_scene_targets[i]
-            scene_text = self._chunk_to_narration(chunk, i, len(chunks), max_words=limit)
-            if scene_text:
-                script.append(scene_text)
+            hook = self._chunk_to_hook(chunk, i, len(chunks))
+            if hook:
+                script.append(hook)
+            
+            # Sau hook, thêm chi tiết (nếu cần scene riêng cho chi tiết)
+            if len(script) < max_scenes - 2:  # Leave room for summary + conclusion
+                detail = self._chunk_to_detail(chunk, i, len(chunks))
+                if detail:
+                    script.append(detail)
         
-        # Scene N-1: Summary/Key Takeaways
-        if len(chunks) > 0:
+        # Scene N-1: Summary/Key Takeaways (chỉ nếu còn chỗ)
+        if len(script) < max_scenes - 1:
             summary = self._generate_summary(chunks)
             if per_scene_targets:
                 summary = self._limit_words(summary, per_scene_targets[-2])
@@ -388,13 +403,13 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
                 script.append(summary)
         
         # Final scene: Conclusion with advice
-        if len(script) > 1:
+        if len(script) < max_scenes:
             conclusion = self._generate_conclusion(title, content)
             if per_scene_targets:
                 conclusion = self._limit_words(conclusion, per_scene_targets[-1])
             script.append(conclusion)
         
-        logger.info(f"✅ Generated {len(script)} heuristic scenes")
+        logger.info(f"✅ Generated {len(script)} heuristic scenes (INTERLEAVED structure)")
         return script[:max_scenes]
     
     def _generate_summary(self, chunks: list) -> str:
@@ -477,6 +492,57 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
         
         return groups[:target_groups]
     
+    def _chunk_to_hook(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
+        """Extract hook (opening line) from a content chunk - the question/attention-grabber"""
+        import random
+        
+        chunk = ' '.join(chunk.split())
+        sentences = [s.strip() for s in chunk.split('.') if s.strip()]
+        
+        if not sentences:
+            return ""
+        
+        # Take first 1-2 sentences as hook (setup the question/topic)
+        hook_text = sentences[0]
+        if len(hook_text.split()) < 10 and len(sentences) > 1:
+            hook_text = f"{sentences[0]}. {sentences[1]}"
+        
+        # Add hook opening for topic transitions
+        if chunk_num > 1:
+            hooks = [
+                "Tiếp theo,",
+                "Ngoài ra,",
+                "Một điểm quan trọng khác là,",
+                "Đặc biệt,",
+            ]
+            hook_text = f"{random.choice(hooks)} {hook_text}"
+        
+        return hook_text[:200]  # Limit hook to ~200 chars
+    
+    def _chunk_to_detail(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
+        """Extract detail/analysis from a content chunk - deeper explanation following the hook"""
+        chunk = ' '.join(chunk.split())
+        sentences = [s.strip() for s in chunk.split('.') if s.strip()]
+        
+        if not sentences:
+            return ""
+        
+        # Skip first sentence (already in hook), use remaining 2-3 sentences for detail
+        detail_sentences = sentences[1:4] if len(sentences) > 1 else sentences
+        detail_text = '. '.join(detail_sentences)
+        
+        if detail_text and not detail_text.endswith('.'):
+            detail_text += '.'
+        
+        # Add natural transition for detail continuation
+        if detail_text:
+            transitions = ["", "Cụ thể,", "Chi tiết hơn,"]  # Some empty for natural flow
+            trans = random.choice(transitions)
+            if trans:
+                detail_text = f"{trans} {detail_text}"
+        
+        return detail_text[:250]  # Limit detail to ~250 chars
+
     def _chunk_to_narration(self, chunk: str, chunk_num: int, total_chunks: int, max_words: int = None) -> str:
         """Convert a content chunk into a natural narration"""
         import random
