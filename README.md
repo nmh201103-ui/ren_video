@@ -305,3 +305,4 @@ script = gen.generate(
 print(script)  # ['Hook...', 'Plot...', 'Highlight...', 'Rating...']
 ```
 
+

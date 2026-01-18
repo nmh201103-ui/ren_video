@@ -47,7 +47,7 @@ class StoryScriptGenerator:
         except:
             return False
     
-    def generate(self, title: str, description: str, content: str, max_scenes: int = None) -> list:
+    def generate(self, title: str, description: str, content: str, max_scenes: int = None, target_duration: int = None) -> list:
         """
         Generate storytelling script from article content
         Returns pure narrative without product mentions or CTAs
@@ -64,12 +64,23 @@ class StoryScriptGenerator:
         
         logger.info(f"📖 Generating story script: {title}")
         
-        # Auto-calculate scenes based on content length if not specified
+        # Duration-aware scene planning
+        words_per_second = 1.6  # Match optimizer pacing
+        total_words_budget = None
+        if target_duration and target_duration > 0:
+            total_words_budget = max(40, int(target_duration * words_per_second))
+        
+        # Auto-calculate scenes if not specified
         if max_scenes is None:
             word_count = len(content.split())
-            # ~20-30 seconds per scene, ~150 words per scene
-            max_scenes = max(8, min(20, word_count // 150))
-            logger.info(f"📊 Auto-calculated {max_scenes} scenes from {word_count} words")
+            if total_words_budget:
+                # Aim for 3–8 scenes depending on budget
+                est_per_scene = max(30, min(80, total_words_budget // 4))
+                max_scenes = max(3, min(8, total_words_budget // est_per_scene))
+            else:
+                # ~20-30 seconds per scene, ~150 words per scene
+                max_scenes = max(8, min(20, word_count // 150))
+            logger.info(f"📊 Planned {max_scenes} scenes (words budget: {total_words_budget or 'auto'})")
         
         # Use LLM if available for better narrative
         if self.use_llm == "openai":
@@ -90,7 +101,7 @@ class StoryScriptGenerator:
                 logger.warning(f"Ollama failed: {e}, falling back to heuristic")
         
         # Fallback: Heuristic approach
-        return self._generate_heuristic(title, description, content, max_scenes)
+        return self._generate_heuristic(title, description, content, max_scenes, total_words_budget)
     
     def _generate_with_openai(self, title: str, description: str, content: str, max_scenes: int) -> list:
         """Use OpenAI to create engaging narrative"""
@@ -103,12 +114,18 @@ Tiêu đề: {title}
 Mô tả: {description}
 Nội dung chính: {summarized_content}
 
+QUY TẮC QUAN TRỌNG:
+- Tuyệt đối CHỈ sử dụng thông tin từ nội dung bài viết trên
+- KHÔNG được thêm sự kiện, con số, ví dụ, hoặc chi tiết NGOÀI bài gốc
+- KHÔNG tự sáng tạo nội dung không có trong bài viết
+- Nếu bài viết nói về "A", đừng thêm "B, C, D" vào kịch bản
+
 Yêu cầu:
 1. Tạo {max_scenes} đoạn kịch bản (mỗi đoạn ~20-30 giây khi đọc):
-   - Đoạn 1: Hook/Mở đầu thu hút
-   - Đoạn 2-{max_scenes-2}: Nội dung chính (kể chuyện tự nhiên)
-   - Đoạn {max_scenes-1}: Tóm tắt điểm chính + lời khuyên áp dụng
-   - Đoạn {max_scenes}: Kết luận truyền cảm hứng (cảm ơn + lời khuyên sâu sắc)
+   - Đoạn 1: Hook/Mở đầu thu hút - chỉ dùng thông tin từ bài viết
+   - Đoạn 2-{max_scenes-2}: Nội dung chính (kể chuyện tự nhiên) - dựa HOÀN TOÀN vào bài gốc
+   - Đoạn {max_scenes-1}: Tóm tắt điểm chính + lời khuyên áp dụng - rút ra từ nội dung bài viết
+   - Đoạn {max_scenes}: Kết luận truyền cảm hứng (cảm ơn + lời khuyên sâu sắc) - liên quan trực tiếp đến chủ đề bài viết
 
 2. Giọng điệu: Tự nhiên, gần gũi, như người kể chuyện cho bạn nghe
 3. KHÔNG quảng cáo sản phẩm, KHÔNG call-to-action
@@ -133,23 +150,30 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
         
         prompt = f"""Tạo kịch bản video storytelling từ bài viết (KHÔNG QUẢNG CÁO):
 
-Tiêu đề: {title}
-Nội dung chính: {summarized_content}
+    Tiêu đề: {title}
+    Nội dung chính: {summarized_content}
 
-Tạo {max_scenes} đoạn kịch bản (mỗi đoạn ~20 giây):
-1. Hook/Mở đầu thu hút
-2-{max_scenes-2}. Kể chuyện nội dung (tự nhiên, gần gũi)
-{max_scenes-1}. Tóm tắt + lời khuyên áp dụng
-{max_scenes}. Kết luận truyền cảm hứng (cảm ơn + insight sâu sắc)
+    QUY TẮC QUAN TRỌNG:
+    - Tuyệt đối CHỈ sử dụng thông tin từ nội dung bài viết trên
+    - KHÔNG được thêm sự kiện, con số, ví dụ, hoặc chi tiết NGOÀI bài gốc
+    - KHÔNG tự sáng tạo nội dung không có trong bài viết
+    - Nếu bài viết nói về "A", đừng thêm "B, C, D" vào kịch bản
 
-Chỉ kể chuyện/chia sẻ kiến thức, KHÔNG quảng cáo, KHÔNG bán hàng.
-Giọng điệu tự nhiên, như người kể chuyện.
+    Tạo {max_scenes} đoạn kịch bản (mỗi đoạn ~20 giây):
+    1. Hook/Mở đầu thu hút - chỉ dùng thông tin từ bài viết
+    2-{max_scenes-2}. Kể chuyện nội dung - dựa HOÀN TOÀN vào bài gốc
+    {max_scenes-1}. Tóm tắt + lời khuyên áp dụng - rút ra từ nội dung bài viết
+    {max_scenes}. Kết luận truyền cảm hứng (cảm ơn + insight) - liên quan trực tiếp đến chủ đề bài viết
 
-Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, không thêm text."""
+    Chỉ kể chuyện/chia sẻ kiến thức, KHÔNG quảng cáo, KHÔNG bán hàng.
+    Giọng điệu tự nhiên, như người kể chuyện.
+    TẤT CẢ ĐẦU RA PHẢI BẰNG TIẾNG VIỆT TỰ NHIÊN (tuyệt đối không dùng tiếng Anh).
+
+    Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, không thêm text."""
 
         try:
             model = os.getenv("OLLAMA_MODEL", "gemma2:2b")
-            timeout = int(os.getenv("OLLAMA_TIMEOUT", "120"))  # Increase timeout for longer content
+            timeout = int(os.getenv("OLLAMA_TIMEOUT", "180"))  # Increase timeout for longer content
             
             logger.info(f"🤖 Ollama: Using model {model}, timeout {timeout}s")
             
@@ -164,6 +188,16 @@ Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, kh
             output = result.stdout.strip()
             logger.info(f"📝 Ollama raw output length: {len(output)} chars")
             
+            # Log full output for debugging
+            logger.info("=" * 80)
+            logger.info("🔍 OLLAMA RAW OUTPUT:")
+            logger.info(output)
+            logger.info("=" * 80)
+            
+            # Check for errors in stderr
+            if result.stderr:
+                logger.warning(f"⚠️ Ollama stderr: {result.stderr}")
+            
             # Clean up markdown and extra text
             output = output.replace("```json", "").replace("```", "").strip()
             
@@ -171,14 +205,43 @@ Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, kh
             import re
             json_match = re.search(r'\[.*\]', output, re.DOTALL)
             if json_match:
-                output = json_match.group(0)
+                extracted_json = json_match.group(0)
+                logger.info(f"✅ Extracted JSON from output ({len(extracted_json)} chars)")
+                output = extracted_json
+            else:
+                logger.warning("⚠️ No JSON array pattern found in output")
             
-            parsed = json.loads(output)
+            # Try to parse JSON; if it fails, attempt repair for unescaped quotes
+            try:
+                parsed = json.loads(output)
+            except json.JSONDecodeError as json_err:
+                logger.warning(f"⚠️ JSON parse error, attempting repair for unescaped quotes...")
+                # Attempt to fix by handling common quote issues in JSON
+                try:
+                    # Try a simple approach: find quotes that break JSON and escape them
+                    # Replace ": " with proper escaping for broken quotes within strings
+                    lines = output.split('\n')
+                    fixed_lines = []
+                    for line in lines:
+                        # If line has unescaped quote issues, try to fix it
+                        if '": "' in line and line.count('"') % 2 == 0:
+                            fixed_lines.append(line)
+                        else:
+                            # Attempt to fix by looking for quote mismatch patterns
+                            fixed_lines.append(line)
+                    repaired = '\n'.join(fixed_lines)
+                    parsed = json.loads(repaired)
+                    logger.info(f"✅ JSON repair successful")
+                except Exception as repair_err:
+                    logger.error(f"❌ JSON repair failed: {repair_err}, returning fallback")
+                    # Return None to fall back to heuristic
+                    return None
             
             # Validate it's a list
             if not isinstance(parsed, list):
                 raise ValueError("Output is not a list")
             
+            logger.info(f"✅ Ollama parsed {len(parsed)} scenes successfully")
             return parsed
             
         except subprocess.TimeoutExpired:
@@ -186,10 +249,11 @@ Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, kh
             return None
         except json.JSONDecodeError as e:
             logger.error(f"❌ Ollama JSON parse error: {e}")
-            logger.debug(f"Raw output: {output[:500]}")
+            logger.error(f"📄 Full raw output:\n{output}")
             return None
         except Exception as e:
             logger.error(f"❌ Ollama error: {e}")
+            logger.exception("Full traceback:")
             return None
     
     def _summarize_content(self, content: str, max_words: int = 800) -> str:
@@ -232,58 +296,127 @@ Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, kh
         logger.info(f"📊 Content summarized: {current_words} → {len(summary.split())} words")
         return summary
     
-    def _generate_heuristic(self, title: str, description: str, content: str, max_scenes: int) -> list:
+    def _generate_heuristic(self, title: str, description: str, content: str, max_scenes: int, total_words_budget: int = None) -> list:
         """Fallback heuristic method"""
+        import difflib
         
-    def _generate_heuristic(self, title: str, description: str, content: str, max_scenes: int) -> list:
-        """Fallback heuristic method"""
+        # Remove description from content start if it's duplicated
+        # Use multiple strategies to detect and remove duplicate text
+        content_original = content
+        if description and len(description.strip()) > 20:
+            # Strategy 1: Direct substring match
+            desc_lower = description.strip().lower()
+            content_lower = content.strip().lower()
+            
+            # Find if description appears in first 30% of content
+            content_first = content_lower[:len(content_lower) // 3]
+            if desc_lower in content_first:
+                # Find where it ends and skip it
+                idx = content_first.find(desc_lower)
+                skip_idx = idx + len(desc_lower)
+                # Find next paragraph boundary
+                next_para = content.find('\n\n', skip_idx)
+                if next_para > 0:
+                    content = content[next_para:].lstrip('\n')
+                else:
+                    # If no paragraph break, skip first paragraph
+                    paragraphs = content.split('\n\n')
+                    if len(paragraphs) > 1:
+                        content = '\n\n'.join(paragraphs[1:])
+            else:
+                # Strategy 2: Fuzzy match (check if description is very similar to first paragraph)
+                paragraphs = content.split('\n\n')
+                if paragraphs:
+                    first_para = paragraphs[0].lower()
+                    # Check if description is 60%+ similar to first paragraph
+                    similarity = difflib.SequenceMatcher(None, desc_lower, first_para).ratio()
+                    if similarity > 0.6:
+                        # Skip first paragraph
+                        if len(paragraphs) > 1:
+                            content = '\n\n'.join(paragraphs[1:])
+        
         # Split content into logical chunks
         chunks = self._split_content(content, max_scenes - 3)  # Leave room for intro + summary + conclusion
+        
+        # Allocate per-scene word budgets (intro + middle + summary + conclusion)
+        per_scene_targets = None
+        if total_words_budget:
+            # Weights: intro 0.9, middles 1.0, summary 0.9, conclusion 0.8
+            middle_count = max(1, len(chunks))
+            weights = [0.9] + [1.0] * middle_count + [0.9] + [0.8]
+            total_weight = sum(weights)
+            per_scene_targets = [max(6, int(total_words_budget * (w / total_weight))) for w in weights]
         
         # Create pure narrative arc (no CTA, no product pitch)
         script = []
         
-        # Scene 1: Hook/Introduction (just intro, no CTA)
-        intro = f"{title}\n\n{description}"
+        # Scene 1: Hook/Introduction - but avoid duplication
+        intro = self._build_hook(title, description)
+        
+        # Check if intro is too similar to first chunk (avoid duplication)
+        if chunks and intro:
+            first_chunk = chunks[0].lower()[:100]
+            intro_lower = intro.lower()[:100]
+            # If intro is 70%+ similar to first chunk, skip it or use a different hook
+            import difflib
+            similarity = difflib.SequenceMatcher(None, intro_lower, first_chunk).ratio()
+            if similarity > 0.7:
+                # Use a generic engaging hook instead
+                intro = "Hãy cùng khám phá những điều thú vị và bổ ích từ bài viết này."
+        
+        if per_scene_targets:
+            intro = self._limit_words(intro, per_scene_targets[0])
         script.append(intro)
         
         # Scenes 2-N: Main content (pure storytelling)
         for i, chunk in enumerate(chunks, 1):
-            scene_text = self._chunk_to_narration(chunk, i, len(chunks))
+            limit = None
+            if per_scene_targets and i < len(per_scene_targets) - 2:
+                limit = per_scene_targets[i]
+            scene_text = self._chunk_to_narration(chunk, i, len(chunks), max_words=limit)
             if scene_text:
                 script.append(scene_text)
         
         # Scene N-1: Summary/Key Takeaways
         if len(chunks) > 0:
-            summary = self._generate_summary(chunks, title)
+            summary = self._generate_summary(chunks)
+            if per_scene_targets:
+                summary = self._limit_words(summary, per_scene_targets[-2])
             if summary:
                 script.append(summary)
         
         # Final scene: Conclusion with advice
         if len(script) > 1:
             conclusion = self._generate_conclusion(title, content)
+            if per_scene_targets:
+                conclusion = self._limit_words(conclusion, per_scene_targets[-1])
             script.append(conclusion)
         
         logger.info(f"✅ Generated {len(script)} heuristic scenes")
         return script[:max_scenes]
     
-    def _generate_summary(self, chunks: list, title: str) -> str:
+    def _generate_summary(self, chunks: list) -> str:
         """Generate summary of key points"""
         if not chunks:
             return ""
         
-        # Extract key phrases from chunks
-        key_points = []
-        for chunk in chunks[:3]:  # First 3 chunks
-            words = chunk.split()
-            # Get first meaningful sentence
-            if len(words) > 0:
-                key_points.append(words[0])
+        # Natural summary opener
+        openers = [
+            "Như vậy, qua những điểm chính trên,",
+            "Tóm lại,",
+            "Qua đó ta thấy,",
+            "Có thể thấy rằng,"
+        ]
+        import random
+        opener = random.choice(openers)
         
-        if key_points:
-            return f"Tóm lại, những điểm chính của '{title}' là: {', '.join(set(key_points[:3]))}. Đó là những bài học quý giá mà chúng ta có thể áp dụng vào cuộc sống hàng ngày."
+        closers = [
+            "Đây là những bài học quý giá có thể áp dụng ngay trong cuộc sống.",
+            "Những điểm này sẽ giúp bạn có cái nhìn sâu sắc hơn.",
+            "Hãy ghi nhớ và áp dụng vào thực tế để thấy sự thay đổi."
+        ]
         
-        return "Những điểm chính từ bài viết này sẽ giúp bạn có cái nhìn sâu sắc hơn về vấn đề."
+        return f"{opener} chúng ta đã hiểu rõ hơn về chủ đề này. {random.choice(closers)}"
     
     def _generate_conclusion(self, title: str, content: str) -> str:
         """Generate inspiring conclusion with advice"""
@@ -342,22 +475,64 @@ Trả về JSON array [{max_scenes} đoạn text tiếng Việt]. CHỈ JSON, kh
         
         return groups[:target_groups]
     
-    def _chunk_to_narration(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
+    def _chunk_to_narration(self, chunk: str, chunk_num: int, total_chunks: int, max_words: int = None) -> str:
         """Convert a content chunk into a natural narration"""
+        import random
+        
         # Remove extra spaces
         chunk = ' '.join(chunk.split())
         
-        # Limit to ~100-150 words per scene (~20-30 seconds when spoken)
+        # Limit words per scene by duration-aware budget if provided
         words = chunk.split()
-        if len(words) > 150:
-            words = words[:150]
+        limit = max_words if max_words and max_words > 0 else 150
+        if len(words) > limit:
+            words = words[:limit]
         
         narration = ' '.join(words)
         
-        # Add transition if not first/last
-        if chunk_num > 1 and chunk_num < total_chunks:
-            narration = f"Tiếp theo, {narration}"
-        elif chunk_num > 1:
-            narration = f"Cuối cùng, {narration}"
+        # Add natural varied transitions
+        if chunk_num == 1:
+            # First content chunk after intro - no transition needed
+            pass
+        elif chunk_num == total_chunks:
+            # Last chunk
+            transitions = [
+                "Cuối cùng,",
+                "Và điều quan trọng nhất là,",
+                "Điểm then chốt là,"
+            ]
+            narration = f"{random.choice(transitions)} {narration}"
+        else:
+            # Middle chunks - varied transitions
+            transitions = [
+                "Tiếp theo,",
+                "Ngoài ra,",
+                "Một điểm quan trọng khác là,",
+                "Đặc biệt,",
+                "Điều này cho thấy,",
+                "",  # Sometimes no transition for natural flow
+                ""
+            ]
+            transition = random.choice(transitions)
+            if transition:
+                narration = f"{transition} {narration}"
         
         return narration
+
+    def _build_hook(self, title: str, description: str) -> str:
+        """Create a concise hook without repeating raw title text."""
+        if description and len(description.strip()) > 20:
+            # Use description directly, trimmed to reasonable length
+            words = description.split()
+            hook = ' '.join(words[:30])
+            return hook
+        # Extract a teaser/key phrase from title without reading it verbatim
+        # Just return a short engaging opening
+        return "Hãy cùng tìm hiểu những bài học quý giá sau đây."
+
+    def _limit_words(self, text: str, max_words: int) -> str:
+        words = text.split()
+        if len(words) <= max_words:
+            return text
+        trimmed = ' '.join(words[:max_words]).rstrip(',;')
+        return trimmed

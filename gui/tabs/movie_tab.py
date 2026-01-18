@@ -516,6 +516,7 @@ class MovieReviewTab:
                         'content': data.get('content', ''),
                         'image_urls': data.get('image_urls', [])
                     }
+                    logger.info(f"📸 Story processing: {len(processed.get('image_urls', []))} images available")
                 else:
                     processor = ContentProcessor()
                     processed = processor.process(data)
@@ -539,7 +540,8 @@ class MovieReviewTab:
                         processed['title'],
                         processed.get('description', ''),
                         processed.get('content', ''),
-                        max_scenes=num_scenes
+                        max_scenes=num_scenes,
+                        target_duration=target_duration
                     )
                 else:
                     script = renderer.script_gen.generate(
@@ -548,7 +550,10 @@ class MovieReviewTab:
                         processed.get('price', '')
                     )
                 
-                processed["script"] = script[:num_scenes]
+                from video.script_optimizer import ScriptDurationOptimizer
+                optimizer = ScriptDurationOptimizer()
+                script = optimizer.optimize(script[:num_scenes], target_duration)
+                processed["script"] = script
             else:
                 # For video type, script already generated in scene analysis
                 self._ui("📺 Preparing video segments...", 65)

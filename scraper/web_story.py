@@ -85,7 +85,35 @@ class WebStoryCScraper:
             # Extract main content
             content = self._extract_content(soup)
             
-            # If content is too short, try Selenium (JavaScript rendering)
+            # If content is too short, try robust JS-free extractors first
+            if not content or len(content.strip()) < 100:
+                # Fallback A: newspaper3k
+                try:
+                    from newspaper import Article
+                    art = Article(url)
+                    art.set_html(resp.text)
+                    art.download_state = 2  # mark as downloaded
+                    art.parse()
+                    if hasattr(art, 'text') and len(art.text.strip()) > 300:
+                        content = art.text
+                        logger.info(f"✅ newspaper3k extracted {len(content)} chars")
+                except Exception as e:
+                    logger.debug(f"newspaper3k not available or failed: {e}")
+                
+                # Fallback B: trafilatura
+                if not content or len(content.strip()) < 100:
+                    try:
+                        import trafilatura
+                        downloaded = trafilatura.fetch_url(url)
+                        if downloaded:
+                            extracted = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+                            if extracted and len(extracted.strip()) > 300:
+                                content = extracted
+                                logger.info(f"✅ trafilatura extracted {len(content)} chars")
+                    except Exception as e:
+                        logger.debug(f"trafilatura not available or failed: {e}")
+            
+            # If still short, try Selenium (JavaScript rendering)
             if not content or len(content.strip()) < 100:
                 logger.warning(f"⚠️ Static scraping got {len(content) if content else 0} chars, trying Selenium...")
                 try:
@@ -100,6 +128,30 @@ class WebStoryCScraper:
                     logger.warning("⚠️ Selenium not installed. Install with: pip install selenium")
                 except Exception as e:
                     logger.warning(f"⚠️ Selenium failed: {e}")
+            
+            # If still short, try Playwright (if installed)
+            if not content or len(content.strip()) < 100:
+                try:
+                    logger.info("🌐 Trying Playwright headless Chromium...")
+                    from playwright.sync_api import sync_playwright
+                    with sync_playwright() as p:
+                        browser = p.chromium.launch(headless=True)
+                        page = browser.new_page()
+                        page.goto(url, timeout=30000, wait_until="networkidle")
+                        html = page.content()
+                        browser.close()
+                        pw_soup = BeautifulSoup(html, 'html.parser')
+                        extracted = self._extract_content(pw_soup)
+                        if extracted and len(extracted.strip()) > 300:
+                            content = extracted
+                            soup = pw_soup
+                            logger.info(f"✅ Playwright extracted {len(content)} chars")
+                        else:
+                            logger.warning("⚠️ Playwright rendered but content still insufficient")
+                except ImportError:
+                    logger.warning("⚠️ Playwright not installed. Install with: pip install playwright && playwright install")
+                except Exception as e:
+                    logger.warning(f"⚠️ Playwright failed: {e}")
             
             # Extract description/excerpt
             description = self._extract_description(soup, content)
@@ -117,23 +169,72 @@ class WebStoryCScraper:
             
             logger.info(f"✅ Extracted: {title[:50]}... ({len(content)} chars)")
             
+            # Extract images from article first
+            article_images = self._extract_article_images(soup, url)
+            logger.info(f"📸 Found {len(article_images)} images in article")
+            
             # Auto-download relevant images
             logger.info("🖼️ Searching for relevant images...")
+            image_paths = []
             try:
                 from video.image_searcher import ImageSearcher, extract_keywords
                 searcher = ImageSearcher()
-                keywords = extract_keywords(title, description, content)
-                keyword_str = " ".join(keywords[:3])
                 
                 # Estimate number of images needed based on content length
-                # Assume ~20-30 seconds per scene, ~150 words
                 word_count = len(content.split())
-                estimated_scenes = max(10, min(20, word_count // 150))  # 10-20 scenes
+                estimated_scenes = max(3, min(8, word_count // 200))  # 3-8 scenes for stories
                 
-                logger.info(f"📊 Estimated {estimated_scenes} scenes, downloading {estimated_scenes} images")
-                image_paths = searcher.search_and_download(keyword_str, num_images=estimated_scenes)
+                # Try to download article images first
+                if article_images:
+                    logger.info(f"⬇️ Downloading {len(article_images[:estimated_scenes])} images from article...")
+                    for idx, img_url in enumerate(article_images[:estimated_scenes], 1):
+                        try:
+                            path = searcher._download_image(img_url, "assets/temp/web_story_images", idx, referer=url)
+                            if path:
+                                image_paths.append(path)
+                                logger.info(f"✅ Article image {idx} downloaded")
+                        except Exception as e:
+                            logger.warning(f"Failed to download article image {idx} from {img_url}: {e}")
+                else:
+                    logger.info("ℹ️ No images found in article HTML")
+                
+                # If not enough images from article, search Google Images by content
+                if len(image_paths) < estimated_scenes:
+                    needed = estimated_scenes - len(image_paths)
+                    logger.info(f"🔍 Need {needed} more images, searching Google Images by scene text...")
+                    
+                    # Split content into chunks and search for each
+                    chunks = content.split('\n\n')[:needed]
+                    for scene_idx, chunk in enumerate(chunks, len(image_paths) + 1):
+                        # Extract key phrase from chunk
+                        words = chunk.split()[:15]  # First 15 words as search query
+                        search_query = ' '.join(words)
+                        
+                        logger.info(f"🔎 Scene {scene_idx}: Searching images for: {search_query[:50]}...")
+                        try:
+                            # Try Google Images search
+                            google_paths = searcher.search_google_images(search_query, num_images=1, output_dir="assets/temp/web_story_images", index=scene_idx)
+                            if google_paths:
+                                image_paths.extend(google_paths)
+                                logger.info(f"✅ Scene {scene_idx} image found via Google Images")
+                            else:
+                                # Fallback: use generic keyword search with correct index
+                                logger.info(f"⚠️ Google Images failed for scene {scene_idx}, trying keyword fallback...")
+                                keywords = extract_keywords(search_query, '', '')
+                                keyword_str = ' '.join(keywords[:2])
+                                fallback_paths = searcher.search_and_download(keyword_str, num_images=1, output_dir="assets/temp/web_story_images", start_index=scene_idx)
+                                if fallback_paths:
+                                    image_paths.extend(fallback_paths)
+                        except Exception as e:
+                            logger.warning(f"Failed to find image for scene {scene_idx}: {e}")
+                
+                # Filter out None/invalid values
+                image_paths = [p for p in image_paths if p and isinstance(p, str) and os.path.exists(p)]
+                
+                logger.info(f"✅ Total {len(image_paths)} images ready for video")
             except Exception as e:
                 logger.warning(f"Image search failed: {e}, continuing without images")
+                logger.exception("Full traceback:")
                 image_paths = []
             
             return {
@@ -302,6 +403,34 @@ class WebStoryCScraper:
                 return author.get_text(strip=True)[:50]
         
         return ''
+    
+    def _extract_article_images(self, soup, base_url: str) -> list:
+        """Extract images from article content"""
+        from urllib.parse import urljoin
+        images = []
+        
+        # Find images in article content
+        for img in soup.find_all('img'):
+            src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
+            if not src:
+                continue
+            
+            # Skip small images (icons, avatars)
+            width = img.get('width')
+            if width and int(width) < 300:
+                continue
+            
+            # Make absolute URL
+            if not src.startswith('http'):
+                src = urljoin(base_url, src)
+            
+            # Skip common non-content images
+            if any(skip in src.lower() for skip in ['logo', 'icon', 'avatar', 'ad', 'banner']):
+                continue
+            
+            images.append(src)
+        
+        return images
     
     def _clean_text(self, text: str) -> str:
         """Clean extracted text"""

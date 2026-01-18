@@ -1,0 +1,351 @@
+"""Image Searcher - Download relevant images for video content"""
+import os
+import re
+import unicodedata
+import requests
+from typing import List
+from urllib.parse import quote_plus
+from utils.logger import get_logger
+
+logger = get_logger()
+
+
+class ImageSearcher:
+    """Search and download images from free sources (DuckDuckGo, fallback to Unsplash direct links)"""
+    
+    def __init__(self):
+        # DuckDuckGo image search (no auth, no rate limiting for reasonable use)
+        self.ddg_api = "https://duckduckgo.com/"
+        # Fallback: Direct Unsplash URLs (no auth needed, just URLs)
+        self.unsplash_base = "https://source.unsplash.com/featured/"
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+    
+    def search_and_download(self, 
+                          keyword: str, 
+                          num_images: int = 5,
+                          output_dir: str = "assets/temp/web_story_images",
+                          referer: str = None,
+                          start_index: int = 1) -> List[str]:
+        """
+        Search for images and download locally
+        
+        Args:
+            keyword: Search keyword (e.g., "business", "success", "learning")
+            num_images: How many images to download
+            output_dir: Where to save images
+            referer: Optional referer header for hotlink prevention
+            start_index: Starting index for image filenames (default 1)
+        
+        Returns:
+            List of local image file paths
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        
+        logger.info(f"🔍 Searching images for: {keyword}")
+        clean_keyword = self._normalize_keyword(keyword)
+        
+        # Try DuckDuckGo first (no auth, no rate limiting)
+        image_urls = self._search_duckduckgo(clean_keyword or keyword, num_images)
+        
+        if not image_urls:
+            logger.warning("DuckDuckGo failed, trying Unsplash direct links...")
+            image_urls = self._get_unsplash_direct(keyword, num_images)
+        
+        if not image_urls:
+            logger.warning("No images found from any source")
+            return []
+        
+        # Download images
+        downloaded_paths = []
+        for i, url in enumerate(image_urls[:num_images], start_index):
+            try:
+                path = self._download_image(url, output_dir, i, referer=referer)
+                if path:
+                    downloaded_paths.append(path)
+            except Exception as e:
+                logger.warning(f"Failed to download image {i}: {e}")
+                continue
+        
+        # If nothing downloaded, fall back to placeholder picsum so we never return empty unless everything failed
+        if not downloaded_paths:
+            logger.info("⚠️ Primary source failed, trying fallback placeholders (picsum)...")
+            fallback_urls = self._get_unsplash_direct(clean_keyword or "nature", num_images)
+            for i, url in enumerate(fallback_urls[:num_images], start_index):
+                try:
+                    path = self._download_image(url, output_dir, i, referer=referer)
+                    if path:
+                        downloaded_paths.append(path)
+                except Exception as e:
+                    logger.warning(f"Fallback download failed ({i}): {e}")
+                    continue
+
+        logger.info(f"✅ Downloaded {len(downloaded_paths)} images")
+        return downloaded_paths
+    
+    def _search_duckduckgo(self, keyword: str, num_images: int) -> List[str]:
+        """Use Unsplash source API with keywords (no auth needed)"""
+        try:
+            # Unsplash Source API: https://source.unsplash.com/{width}x{height}/?{keywords}
+            # Free to use, no auth, returns relevant stock photos
+            urls = []
+            
+            # Clean keywords for URL
+            clean_keyword = keyword.replace(' ', ',').lower()
+            encoded_keyword = quote_plus(clean_keyword)
+            
+            # Generate multiple URLs with variation
+            # Adding sig parameter for different images with same keywords
+            for i in range(min(num_images, 20)):
+                # 1080x1920 is portrait (vertical video format)
+                url = f"https://source.unsplash.com/1080x1920/?{encoded_keyword}&sig={i}"
+                urls.append(url)
+            
+            logger.info(f"Generated {len(urls)} Unsplash URLs for: {keyword}")
+            return urls
+        except Exception as e:
+            logger.warning(f"Unsplash URL generation failed: {e}")
+            return []
+    
+    def _get_unsplash_direct(self, keyword: str, num_images: int) -> List[str]:
+        """Fallback: Use more Lorem Picsum URLs with different styles"""
+        try:
+            urls = []
+            # More URLs for fallback
+            for i in range(num_images, num_images * 2):
+                url = f"https://picsum.photos/1080/1920?random={i}"
+                urls.append(url)
+            
+            logger.info(f"Generated {len(urls)} fallback image URLs")
+            return urls[:num_images]
+        except Exception as e:
+            logger.warning(f"Fallback image generation failed: {e}")
+            return []
+    
+    def search_google_images(self, query: str, num_images: int = 1, output_dir: str = "assets/temp/web_story_images", index: int = 1) -> List[str]:
+        """Search and download images from Google Images (via Bing as fallback)"""
+        try:
+            # Try using bing-image-downloader if available
+            try:
+                from bing_image_downloader import downloader
+                logger.info(f"🔍 Downloading from Bing Images: {query}")
+                
+                downloader.download(
+                    query,
+                    limit=num_images,
+                    output_dir="dataset",
+                    adult_filter_off=True,
+                    force_replace=True,
+                    timeout=15,
+                    verbose=False,
+                    filter=''
+                )
+                
+                # Move downloaded images to our directory
+                import shutil
+                import glob
+                dataset_path = os.path.join("dataset", query.replace(" ", "_"))
+                
+                # Check if folder exists, if not try without underscore replacement
+                if not os.path.exists(dataset_path):
+                    # Try alternate naming
+                    for folder in os.listdir("dataset") if os.path.exists("dataset") else []:
+                        folder_path = os.path.join("dataset", folder)
+                        if os.path.isdir(folder_path) and folder.lower().startswith(query.split()[0].lower()):
+                            dataset_path = folder_path
+                            break
+                
+                if os.path.exists(dataset_path):
+                    images = glob.glob(os.path.join(dataset_path, "*.jpg"))[:num_images]
+                    if not images:
+                        images = glob.glob(os.path.join(dataset_path, "*.png"))[:num_images]
+                    
+                    if images:
+                        os.makedirs(output_dir, exist_ok=True)
+                        
+                        downloaded = []
+                        for img_file in images:
+                            dest = os.path.normpath(os.path.join(output_dir, f"image_{index}.jpg"))
+                            shutil.copy2(img_file, dest)
+                            downloaded.append(dest)
+                            logger.info(f"✅ Bing: Copied {os.path.basename(dest)}")
+                        
+                        return downloaded
+                    else:
+                        logger.warning(f"⚠️ Bing folder exists but no images found in {dataset_path}")
+                else:
+                    logger.warning(f"⚠️ Bing output folder not found: {dataset_path}")
+            except ImportError:
+                logger.warning("bing-image-downloader not installed, trying alternative method")
+            except Exception as e:
+                logger.error(f"❌ Bing Images error: {type(e).__name__}: {e}")
+                logger.info("Falling back to alternative image source...")
+            
+            # Fallback: Use simple keyword search with Bing (retry with shorter query)
+            short_query = ' '.join(query.split()[:5])
+            logger.info(f"📸 Retrying with simplified query: {short_query}")
+            
+            # Retry Bing with simpler query
+            if short_query != query:
+                try:
+                    from bing_image_downloader import downloader
+                    downloader.download(
+                        short_query,
+                        limit=num_images,
+                        output_dir="dataset",
+                        adult_filter_off=True,
+                        force_replace=True,
+                        timeout=15,
+                        verbose=False,
+                        filter=''
+                    )
+                    # Find and copy images
+                    dataset_path = os.path.join("dataset", short_query)
+                    if os.path.exists(dataset_path):
+                        images = [f for f in os.listdir(dataset_path) if f.endswith(('.jpg', '.png', '.jpeg'))][:num_images]
+                        downloaded = []
+                        for idx, img_name in enumerate(images, index):
+                            img_file = os.path.join(dataset_path, img_name)
+                            dest = os.path.normpath(os.path.join(output_dir, f"image_{idx}.jpg"))
+                            os.makedirs(output_dir, exist_ok=True)
+                            shutil.copy2(img_file, dest)
+                            downloaded.append(dest)
+                            logger.info(f"✅ Bing retry: Copied {os.path.basename(dest)}")
+                        if downloaded:
+                            return downloaded
+                except Exception as retry_err:
+                    logger.error(f"❌ Bing retry failed: {retry_err}")
+            
+            # Last resort: Use placeholder images
+            logger.warning("⚠️ All image sources failed, using placeholders")
+            return []
+            
+        except Exception as e:
+            logger.error(f"Google Images search failed: {e}")
+            return []
+    
+    def _download_image(self, url: str, output_dir: str, index: int, referer: str = None) -> str:
+        """Download single image and save locally"""
+        try:
+            # Skip invalid URLs (data:, javascript:, lazy-load placeholders)
+            if not url or url.startswith(('data:', 'javascript:', 'about:')):
+                logger.warning(f"⚠️ Skipping invalid URL: {url[:50]}...")
+                return None
+            
+            # Follow redirects for Unsplash URLs
+            headers = dict(self.headers)
+            if referer:
+                headers['Referer'] = referer
+            resp = requests.get(url, headers=headers, timeout=20, stream=True, allow_redirects=True)
+            resp.raise_for_status()
+            
+            # Validate Content-Type header
+            content_type = resp.headers.get('content-type', '').lower()
+            if 'image' not in content_type:
+                logger.warning(f"⚠️ URL did not return image content-type ({content_type}) for {url}")
+                return None
+            
+            # Read image content
+            from PIL import Image
+            from io import BytesIO
+            
+            img_data = BytesIO(resp.content)
+            img = Image.open(img_data)
+            
+            # Convert to RGB (handles WebP, PNG with alpha, RGBA, etc.)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                # Create white background for transparent images
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Always save as JPEG for consistency
+            filename = f"image_{index}.jpg"
+            filepath = os.path.normpath(os.path.join(output_dir, filename))
+            
+            # Ensure directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Save as JPEG with quality optimization
+            img.save(filepath, 'JPEG', quality=90, optimize=True)
+            
+            logger.info(f"✅ Downloaded: {filename} ({os.path.getsize(filepath)} bytes)")
+            return filepath
+            
+        except Exception as verify_err:
+            logger.warning(f"⚠️ Failed to download/convert image from {url}: {type(verify_err).__name__}: {verify_err}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to download image from {url}: {e}")
+            return None
+
+    def _normalize_keyword(self, keyword: str) -> str:
+        """Strip accents/special chars to improve stock image search stability"""
+        text = keyword or ''
+        # Normalize and drop diacritics
+        nfkd = unicodedata.normalize('NFD', text)
+        text = ''.join([c for c in nfkd if unicodedata.category(c) != 'Mn'])
+        # Keep letters, numbers, commas, spaces
+        text = re.sub(r'[^0-9a-zA-Z, ]+', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text.lower()
+
+
+def extract_keywords(title: str, description: str, content: str) -> List[str]:
+    """Extract relevant keywords from content for image search"""
+    # Combine title (higher weight) and description
+    text = f"{title} {title} {description}".lower()
+    
+    # Vietnamese to English concept mapping for better image search
+    concept_map = {
+        'thành công': 'success business achievement',
+        'kinh doanh': 'business entrepreneurship',
+        'học': 'learning education knowledge',
+        'tiền': 'money finance wealth',
+        'sống': 'life lifestyle living',
+        'người': 'people person human',
+        'công việc': 'work job career',
+        'gia đình': 'family home',
+        'sức khỏe': 'health wellness',
+        'hạnh phúc': 'happiness joy',
+        'khôn ngoan': 'wisdom smart intelligence',
+        'bài học': 'lesson learning education',
+        'kinh nghiệm': 'experience skill',
+        'đầu tư': 'investment finance business',
+        'phát triển': 'growth development progress'
+    }
+    
+    # Find concepts in text
+    keywords = []
+    for vn_word, en_concepts in concept_map.items():
+        if vn_word in text:
+            keywords.extend(en_concepts.split()[:2])  # Take first 2 concepts
+            if len(keywords) >= 5:
+                break
+    
+    # Fallback: extract English words or key Vietnamese words
+    if not keywords:
+        stop_words = {
+            'và', 'hoặc', 'là', 'được', 'có', 'cái', 'những', 'rất', 'từ', 'đến', 'cho',
+            'để', 'trong', 'trên', 'dưới', 'ngoài', 'cùng', 'tại', 'bởi', 'sau', 'trước',
+            'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'or', 'and',
+            'này', 'đó', 'như', 'nhưng', 'mà', 'thì', 'nên', 'đã', 'sẽ', 'hãy'
+        }
+        words = re.findall(r'\b\w{4,}\b', text)
+        keywords = [w for w in words if w not in stop_words][:5]
+    
+    return keywords[:5] or ['lifestyle', 'inspiration']
+
+
+if __name__ == "__main__":
+    searcher = ImageSearcher()
+    
+    # Test
+    paths = searcher.search_and_download("business success learning", num_images=3)
+    print(f"Downloaded: {paths}")

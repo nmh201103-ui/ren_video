@@ -139,7 +139,7 @@ class SmartVideoRenderer:
             images = images[:max_images]
 
         logger.info("🎤 Render video: %s", title)
-        logger.info("📸 Images available: %d", len(images))
+        logger.info("📸 Images available: %d - %s", len(images), images[:3] if images else "no images")
         if not images:
             logger.warning("⚠️ No images! Will use text slides instead")
         
@@ -184,10 +184,13 @@ class SmartVideoRenderer:
 
                 if audio_path and os.path.exists(audio_path):
                     audio = AudioFileClip(audio_path)
-                    duration = max(4.0, audio.duration + 0.5)  # Longer scenes
+                    if target_duration:
+                        duration = max(2.0, audio.duration + 0.2)
+                    else:
+                        duration = max(4.0, audio.duration + 0.5)  # Longer scenes
                     audios.append(audio.set_start(t))
                 else:
-                    duration = 4.0
+                    duration = 2.0 if target_duration else 4.0
                 
                 total_duration += duration
 
@@ -343,6 +346,12 @@ class SmartVideoRenderer:
             self.cleanup()
             return False
         finally:
+            # Ensure video file handle is released to allow cleanup of source files
+            try:
+                if 'base_clip' in locals() and base_clip:
+                    base_clip.close()
+            except Exception:
+                pass
             self.cleanup()
 
     def _create_avatar_scene(self, image_path, audio_path, scene_idx, progress_callback=None):
@@ -387,7 +396,9 @@ class SmartVideoRenderer:
 
     def make_premium_scene(self, img_url, text, duration=4.0, scene_idx=0):
         """Create simple scene with image. Audio only, no text overlay."""
-        img = self.load_image(img_url) or self.text_image(text)
+        img = self.load_image(img_url) if img_url else None
+        if not img:
+            img = self.text_image(text)
         w, h = self.template["width"], self.template["height"]
         
         # REVIEWER MODE: Remove background from product image for cleaner look
@@ -448,13 +459,29 @@ class SmartVideoRenderer:
     def load_image(self, url):
         """Load image from URL or local file path"""
         try:
+            # Skip if URL is None or empty
+            if not url:
+                return None
+            
             # Check if it's a local file path
-            if url and os.path.exists(url):
-                logger.info(f"📁 Loading local image: {os.path.basename(url)}")
-                return Image.open(url).convert("RGB")
+            # Try both relative and absolute paths
+            filepath = url
+            if not os.path.isabs(filepath):
+                # Try relative to current directory
+                if not os.path.exists(filepath):
+                    # Try relative to project root
+                    filepath = os.path.join(os.getcwd(), url)
+            
+            if os.path.exists(filepath):
+                logger.info(f"📁 Loading local image: {os.path.basename(filepath)}")
+                img = Image.open(filepath).convert("RGB")
+                logger.info(f"✅ Image loaded successfully: {os.path.getsize(filepath)} bytes")
+                return img
+            else:
+                logger.warning(f"⚠️ Image file not found: {filepath} (url was: {url})")
             
             # Otherwise treat as URL
-            logger.info(f"🌐 Downloading image from URL")
+            logger.info(f"🌐 Downloading image from URL: {url}")
             r = requests.get(url, timeout=10)
             r.raise_for_status()
             return Image.open(BytesIO(r.content)).convert("RGB")
