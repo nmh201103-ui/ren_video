@@ -553,8 +553,9 @@ class MovieReviewTab:
                     )
                 
                 # ✅ AUTO-DOWNLOAD ĐỦ ẢNH TRƯỚC KHI EXPAND SCRIPT
+                # Với story mode, bỏ toàn bộ ảnh cũ (scraper tải sẵn) để tránh lệch thứ tự scene
                 # Đảm bảo mỗi scene có 1 ảnh (dùng text gốc, chưa có elaboration)
-                current_images = processed.get('image_urls', [])
+                current_images = [] if actual_type == "story" else processed.get('image_urls', [])
                 if len(current_images) < len(script):
                     logger.info(f"🔍 Pre-downloading images: {len(current_images)} → {len(script)} scenes")
                     from video.image_searcher import ImageSearcher
@@ -573,6 +574,8 @@ class MovieReviewTab:
                             if paths:
                                 current_images.extend(paths)
                     processed['image_urls'] = current_images
+                    # Lock images so renderer won't auto-download again (avoid mismatch)
+                    processed['images_locked'] = True
                     logger.info(f"✅ Images ready: {len(current_images)} for {len(script)} scenes")
                 
                 # Optimize script duration (expand/compress)

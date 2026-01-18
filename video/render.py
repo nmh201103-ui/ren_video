@@ -166,7 +166,9 @@ class SmartVideoRenderer:
         for i, scene in enumerate(script[:15], 1):  # Log first 15 scenes
             logger.info(f"   [{i}] {scene[:100]}...")
         try:
-            if script and len(images) < len(script):
+            # If GUI locked images, don't auto-augment (avoid mismatched re-downloads)
+            images_locked = data.get("images_locked", False)
+            if script and len(images) < len(script) and not images_locked:
                 from video.image_searcher import ImageSearcher, extract_keywords
                 searcher = ImageSearcher()
                 needed = len(script) - len(images)
