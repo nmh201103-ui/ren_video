@@ -506,34 +506,26 @@ class SmartVideoRenderer:
     # =========================
 
     def load_image(self, url):
-        """Load image from URL or local file path"""
+        """Load image from URL or local file path. URLs (http/https) are always downloaded."""
         try:
-            # Skip if URL is None or empty
             if not url:
                 return None
-            
-            # Check if it's a local file path
-            # Try both relative and absolute paths
-            filepath = url
-            if not os.path.isabs(filepath):
-                # Try relative to current directory
-                if not os.path.exists(filepath):
-                    # Try relative to project root
-                    filepath = os.path.join(os.getcwd(), url)
-            
+            s = str(url).strip()
+            # URL first: never treat as local path (tránh lỗi os.path.join(cwd, url) với ảnh Shopee)
+            if s.startswith("http://") or s.startswith("https://"):
+                logger.info(f"🌐 Downloading image: {s[:80]}...")
+                r = requests.get(s, timeout=15)
+                r.raise_for_status()
+                return Image.open(BytesIO(r.content)).convert("RGB")
+            # Local path
+            filepath = s
+            if not os.path.isabs(filepath) and not os.path.exists(filepath):
+                filepath = os.path.join(os.getcwd(), s)
             if os.path.exists(filepath):
                 logger.info(f"📁 Loading local image: {os.path.basename(filepath)}")
-                img = Image.open(filepath).convert("RGB")
-                logger.info(f"✅ Image loaded successfully: {os.path.getsize(filepath)} bytes")
-                return img
-            else:
-                logger.warning(f"⚠️ Image file not found: {filepath} (url was: {url})")
-            
-            # Otherwise treat as URL
-            logger.info(f"🌐 Downloading image from URL: {url}")
-            r = requests.get(url, timeout=10)
-            r.raise_for_status()
-            return Image.open(BytesIO(r.content)).convert("RGB")
+                return Image.open(filepath).convert("RGB")
+            logger.warning(f"⚠️ Image file not found: {filepath}")
+            return None
         except Exception as e:
             logger.warning(f"⚠️ Failed to load image: {e}")
             return None

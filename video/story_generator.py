@@ -1,6 +1,7 @@
 """Story/Narrative Script Generator - For storytelling videos"""
 import os
 import json
+import random
 import subprocess
 from utils.logger import get_logger
 
@@ -413,42 +414,79 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
         return script[:max_scenes]
     
     def _generate_summary(self, chunks: list) -> str:
-        """Generate summary of key points"""
+        """Generate comprehensive summary of key points"""
         if not chunks:
             return ""
         
-        # Natural summary opener
-        openers = [
-            "Như vậy, qua những điểm chính trên,",
-            "Tóm lại,",
-            "Qua đó ta thấy,",
-            "Có thể thấy rằng,"
-        ]
         import random
-        opener = random.choice(openers)
+        
+        # More comprehensive summary openers
+        openers = [
+            "Vậy là chúng ta đã cùng nhau tìm hiểu",
+            "Qua những điểm chính vừa rồi, ta thấy rõ",
+            "Tóm lại những gì chúng ta vừa khám phá",
+            "Như vậy, qua những nội dung trên"
+        ]
+        
+        # Richer content for summary
+        bodies = [
+            "rất nhiều thông tin bổ ích và thú vị",
+            "những kiến thức quan trọng và thực tế",
+            "nhiều điều đáng chú ý và hữu ích",
+            "các thông tin giá trị mà chúng ta cần nắm rõ"
+        ]
         
         closers = [
-            "Đây là những bài học quý giá có thể áp dụng ngay trong cuộc sống.",
-            "Những điểm này sẽ giúp bạn có cái nhìn sâu sắc hơn.",
-            "Hãy ghi nhớ và áp dụng vào thực tế để thấy sự thay đổi."
+            "Đây chắc chắn là những bài học quý giá có thể áp dụng ngay vào cuộc sống hàng ngày.",
+            "Những kiến thức này sẽ giúp bạn có cái nhìn sâu sắc và toàn diện hơn về chủ đề.",
+            "Hãy ghi nhớ và áp dụng vào thực tế để thấy được sự thay đổi tích cực.",
+            "Hy vọng những thông tin này sẽ hữu ích cho bạn trong công việc và cuộc sống."
         ]
         
-        return f"{opener} chúng ta đã hiểu rõ hơn về chủ đề này. {random.choice(closers)}"
+        return f"{random.choice(openers)} {random.choice(bodies)}. {random.choice(closers)}"
     
     def _generate_conclusion(self, title: str, content: str) -> str:
-        """Generate inspiring conclusion with advice"""
+        """Generate rich conclusion with thanks + call to action"""
+        import random
+        
         # Analyze content sentiment/type
         content_lower = content.lower()
         
-        # Different conclusions based on content
+        # Thanks/closing phrases
+        thanks = [
+            "Cảm ơn các bạn đã theo dõi hết video này!",
+            "Cảm ơn bạn đã dành thời gian lắng nghe!",
+            "Rất cảm ơn các bạn đã ở lại đến phút cuối!",
+            "Xin chân thành cảm ơn các bạn đã theo dõi!"
+        ]
+        
+        # Call to action
+        ctas = [
+            "Đừng quên like, share và subscribe để ủng hộ kênh nhé!",
+            "Hãy để lại comment chia sẻ suy nghĩ của bạn bên dưới!",
+            "Nhấn like và đăng ký kênh để không bỏ lỡ những video tiếp theo!",
+            "Đăng ký kênh và bật chuông thông báo để cập nhật video mới nhất!"
+        ]
+        
+        # Farewell
+        farewells = [
+            "Hẹn gặp lại các bạn trong video sau!",
+            "Chúc các bạn một ngày tốt lành!",
+            "Hẹn gặp lại các bạn rất sớm!",
+            "Chào tạm biệt và hẹn gặp lại!"
+        ]
+        
+        # Different conclusions based on content type
         if any(word in content_lower for word in ['học', 'bài học', 'kinh nghiệm']):
-            return f"Hy vọng qua '{title}', bạn đã học được những điều bổ ích. Hãy áp dụng những kiến thức này vào cuộc sống để thấy sự thay đổi tích cực. Cảm ơn vì đã lắng nghe và chúc bạn thành công!"
+            advice = "Hãy áp dụng những kiến thức này vào thực tế để thấy sự thay đổi tích cực."
         elif any(word in content_lower for word in ['câu chuyện', 'chuyện', 'sự kiện']):
-            return f"Câu chuyện này cho ta thấy rằng mỗi trải nghiệm đều có giá trị riêng. Hãy suy ngẫm và tìm cách ứng dụng vào tình huống của chính mình. Cảm ơn các bạn đã theo dõi!"
+            advice = "Hy vọng câu chuyện này đã mang lại cho bạn những suy ngẫm bổ ích."
         elif any(word in content_lower for word in ['lợi ích', 'tác dụng', 'cách']):
-            return f"Những lợi ích và cách tiếp cận từ '{title}' chắc chắn sẽ giúp ích cho bạn. Hãy thử áp dụng và chia sẻ kết quả với mọi người. Cảm ơn đã xem và chúc bạn may mắn!"
+            advice = "Đừng ngần ngại thử áp dụng và chia sẻ kết quả với mọi người."
         else:
-            return f"Bài viết '{title}' đã mang đến nhiều thông tin bổ ích. Hãy dành thời gian suy ngẫm và tìm cách áp dụng vào cuộc sống của bạn. Cảm ơn vì đã theo dõi chúng tôi!"
+            advice = "Hy vọng video này đã mang đến cho bạn nhiều thông tin hữu ích."
+        
+        return f"{advice} {random.choice(thanks)} {random.choice(ctas)} {random.choice(farewells)}"
     
     def _split_content(self, content: str, max_chunks: int) -> list:
         """Split content into logical paragraphs/chunks"""
@@ -588,15 +626,26 @@ Trả về JSON array gồm {max_scenes} đoạn text tiếng Việt. Chỉ tr�
         return narration
 
     def _build_hook(self, title: str, description: str) -> str:
-        """Create a concise hook without repeating raw title text."""
+        """Create engaging intro with greeting + overview."""
+        import random
+        
+        # Greeting openers
+        greetings = [
+            "Xin chào các bạn!",
+            "Chào mừng các bạn đã quay lại!",
+            "Xin chào tất cả mọi người!",
+            "Chào các bạn!"
+        ]
+        greeting = random.choice(greetings)
+        
+        # Build intro from description or title
         if description and len(description.strip()) > 20:
-            # Use description directly, trimmed to reasonable length
             words = description.split()
-            hook = ' '.join(words[:30])
-            return hook
-        # Extract a teaser/key phrase from title without reading it verbatim
-        # Just return a short engaging opening
-        return "Hãy cùng tìm hiểu những bài học quý giá sau đây."
+            content_intro = ' '.join(words[:40])  # More words for better context
+            return f"{greeting} Hôm nay chúng ta sẽ cùng tìm hiểu về {content_intro}"
+        
+        # Fallback with title reference
+        return f"{greeting} Hôm nay chúng ta sẽ khám phá những điều thú vị về '{title}'. Hãy cùng bắt đầu nhé!"
 
     def _limit_words(self, text: str, max_words: int) -> str:
         words = text.split()

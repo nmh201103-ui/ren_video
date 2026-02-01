@@ -558,17 +558,35 @@ class MovieReviewTab:
                 current_images = [] if actual_type == "story" else processed.get('image_urls', [])
                 if len(current_images) < len(script):
                     logger.info(f"🔍 Pre-downloading images: {len(current_images)} → {len(script)} scenes")
-                    from video.image_searcher import ImageSearcher
+                    from video.image_searcher import ImageSearcher, extract_keywords
                     searcher = ImageSearcher()
+                    scraped_title = processed.get('title', '')
+                    scraped_description = processed.get('description', '')
                     for scene_idx in range(len(current_images) + 1, len(script) + 1):
                         scene_text = script[scene_idx - 1]
-                        query = " ".join(scene_text.split()[:15])  # Use original scene text
+                        
+                        # Determine search query from text related to this scene (not old local images)
+                        if scene_idx == 1:
+                            query = scraped_title
+                            logger.info(f"🔎 Scene {scene_idx} (Intro): Searching with title: {query[:50]}...")
+                        elif scene_idx == len(script):
+                            query = f"{scraped_title} {scraped_description}".strip()
+                            logger.info(f"🔎 Scene {scene_idx} (Conclusion): Searching with title+desc: {query[:50]}...")
+                        else:
+                            query = " ".join(scene_text.split()[:15])
+                        
                         paths = searcher.search_google_images(query, num_images=1, output_dir="assets/temp/web_story_images", index=scene_idx)
+                        if not paths:
+                            # Fallback: keywords from scene + title/desc so image matches content
+                            keywords = extract_keywords(scraped_title, scraped_description or "", scene_text)
+                            keyword_str = " ".join(keywords[:3]) or query
+                            logger.info(f"🔎 Scene {scene_idx} fallback: keywords {keyword_str[:50]}...")
+                            paths = searcher.search_and_download(keyword_str, num_images=1, output_dir="assets/temp/web_story_images", start_index=scene_idx)
                         if paths:
                             current_images.extend(paths)
                             logger.info(f"✅ Scene {scene_idx}: Downloaded image")
                         else:
-                            # Fallback placeholder
+                            # Last resort: placeholder (no reuse of old dataset folder)
                             placeholder = [f"https://picsum.photos/1080/1920?random={scene_idx}"]
                             paths = searcher._download_batch(placeholder, "assets/temp/web_story_images", scene_idx)
                             if paths:

@@ -380,10 +380,72 @@ class VideoHighlightDetector:
 
 class SmartClipper:
     """High-level interface with auto-cleanup"""
-    
+
     def __init__(self):
         self.detector = VideoHighlightDetector()
-    
+
+    def generate_scene_reviews(self, video_path: str, num_clips: int = 5, method: str = "semantic", model: str = "ollama3:4b") -> list:
+        """
+        Cắt scene, lấy transcript từng đoạn, gửi cho AI sinh review/phụ đề cho từng đoạn.
+        Trả về list dict: [{start, end, text, review, subtitle}]
+        """
+        import tempfile
+        from video.ai_providers import OllamaScriptGenerator
+        try:
+            import whisper
+        except ImportError:
+            raise RuntimeError("Cần cài openai-whisper để lấy transcript từng scene!")
+
+        # 1. Detect scenes/highlights
+        highlights = self.detector.detect_highlights(video_path, num_clips, method=method)
+        if not highlights:
+            return []
+
+        # 2. Load video
+        from moviepy.editor import VideoFileClip
+        video = VideoFileClip(video_path)
+
+        # 3. Whisper model
+        model_name = os.getenv("WHISPER_MODEL", "small")
+        whisper_model = whisper.load_model(model_name)
+
+        # 4. AI review generator
+        ai_gen = OllamaScriptGenerator(model=model)
+
+        results = []
+        for i, h in enumerate(highlights):
+            start, end = h["start"], h["end"]
+            # Cắt audio đoạn scene
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                audio_path = f.name
+            video.subclip(start, end).audio.write_audiofile(audio_path, fps=16000, nbytes=2, codec="pcm_s16le", verbose=False, logger=None)
+            # Lấy transcript
+            transcript = whisper_model.transcribe(audio_path, language="vi", word_timestamps=False)
+            text = transcript.get("text", "").strip()
+            # Gửi cho AI sinh review/phụ đề
+            review = ""
+            try:
+                review_list = ai_gen.generate(f"Scene {i+1}", text, "")
+                review = " ".join(review_list) if isinstance(review_list, list) else str(review_list)
+            except Exception as e:
+                review = f"[AI error: {e}]"
+            # Lưu kết quả
+            results.append({
+                "scene": i+1,
+                "start": start,
+                "end": end,
+                "text": text,
+                "review": review,
+                "subtitle": text
+            })
+            # Xóa file tạm
+            try:
+                os.remove(audio_path)
+            except:
+                pass
+        video.close()
+        return results
+
     def clip_from_url(self, url: str, num_clips: int = 5, 
                      format: str = 'short', cleanup: bool = True, method: str = "audio", clip_duration: int = None) -> Dict:
         """

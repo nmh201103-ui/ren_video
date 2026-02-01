@@ -34,7 +34,20 @@ class ShopeeScraper(BaseScraper):
                     page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 
                 # Đợi trang ổn định một chút
-                page.wait_for_timeout(3000) 
+                page.wait_for_timeout(3000)
+
+                # Kiểm tra Shopee redirect sang captcha/xác minh — không scrape được
+                current_url = page.url or ""
+                if "/verify/captcha" in current_url or "/verify" in current_url:
+                    logger.error("❌ Shopee đang hiển thị trang captcha/xác minh. Hoàn thành captcha trong Chrome rồi thử lại.")
+                    out = self._empty_data(url)
+                    out["_scrape_failed"] = True
+                    out["_scrape_error"] = (
+                        "Shopee chuyển sang trang captcha/xác minh. "
+                        "Bạn cần: 1) Mở link sản phẩm trong Chrome, 2) Bấm 'Thử Lại' / hoàn thành captcha (nếu có), "
+                        "3) Đợi trang sản phẩm load xong, 4) Bấm Generate lại."
+                    )
+                    return out
 
                 # 1. Lấy Title, Ảnh và Giá
                 title = self._get_title(page)
@@ -71,6 +84,29 @@ class ShopeeScraper(BaseScraper):
                 # 3. Làm sạch nhẹ nhàng (giữ nguyên cấu trúc xuống dòng để Renderer tách câu)
                 clean_desc = description.replace("MÔ TẢ SẢN PHẨM", "").strip()
 
+                # Fallback giá từ mô tả nếu DOM không lấy được
+                if (not price or price == "0") and clean_desc:
+                    price_match = re.search(r"(?:giá|Giá|GIÁ|₫|VNĐ|vnd)\s*[:\s]*([\d.,]+)\s*(?:₫|VNĐ|k)?", clean_desc, re.IGNORECASE)
+                    if not price_match:
+                        price_match = re.search(r"\b(\d{2,3}(?:\.\d{3})+(?:\.\d{3})?)\s*₫", clean_desc)
+                    if price_match:
+                        pstr = re.sub(r"[^\d]", "", price_match.group(1))
+                        if len(pstr) >= 4:
+                            price = pstr
+                            logger.info("📌 Lấy giá từ mô tả (fallback): %s", price)
+
+                # Nếu 0 ảnh + title generic → có thể đang trang captcha/lỗi tải
+                generic_titles = ("Sản phẩm Shopee", "Shopee", "Shopee Việt Nam")
+                if len(images) == 0 and (not title or title.strip() in generic_titles):
+                    logger.warning("⚠️ Không lấy được ảnh và title — có thể trang captcha hoặc 'Lỗi tải'. Hoàn thành xác minh trong Chrome rồi thử lại.")
+                    out = self._empty_data(url)
+                    out["_scrape_failed"] = True
+                    out["_scrape_error"] = (
+                        "Không lấy được ảnh sản phẩm (trang có thể đang captcha hoặc 'Lỗi tải'). "
+                        "Trong Chrome: bấm 'Thử Lại' / hoàn thành captcha, đợi trang sản phẩm load xong rồi Generate lại."
+                    )
+                    return out
+
                 # --- LOG KIỂM TRA ---
                 logger.info('[SCRAPER COMPLETED]')
                 logger.info('Title: %s', title[:60])
@@ -90,7 +126,10 @@ class ShopeeScraper(BaseScraper):
 
             except Exception as e:
                 logger.error(f"❌ Scraper Error: {e}")
-                return self._empty_data(url)
+                out = self._empty_data(url)
+                out["_scrape_failed"] = True
+                out["_scrape_error"] = str(e)
+                return out
 
     def _get_description_logic(self, page) -> str:
         try:
@@ -179,34 +218,60 @@ class ShopeeScraper(BaseScraper):
 
     def _get_title(self, page) -> str:
         try:
-            t = page.title().split('|')[0].strip()
-            if not t or t == "Shopee" or len(t) < 5:
-                t = page.evaluate("document.querySelector('meta[property=\"og:title\"]')?.content") or "Sản phẩm Shopee"
+            # Ưu tiên og:title (trang sản phẩm luôn có), tránh title tab generic "Shopee Việt Nam"
+            og = page.evaluate("document.querySelector('meta[property=\"og:title\"]')?.content") or ""
+            if og and len(og.strip()) > 10 and "shopee" not in og.strip().lower()[:20]:
+                return og.strip().split("|")[0].strip()
+            t = page.title().split("|")[0].strip()
+            if not t or t == "Shopee" or "Shopee Việt Nam" in t or len(t) < 8:
+                return og.strip().split("|")[0].strip() if og else "Sản phẩm Shopee"
             return t
-        except:
+        except Exception:
             return "Sản phẩm Shopee"
 
     def _get_images_advanced(self, page) -> List[str]:
         try:
+            # Cuộn tới vùng gallery để kích lazy-load ảnh sản phẩm
+            try:
+                page.evaluate("window.scrollTo(0, 400)")
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
             raw_urls = page.evaluate("""() => {
                 const urls = new Set();
-                document.querySelectorAll('img').forEach(img => {
-                    let src = img.getAttribute('data-src') || img.src;
-                    if (src && (src.includes('usercontent') || src.includes('shopee.com/file/'))) {
-                        // Loại bỏ các thumbnail nhỏ để lấy ảnh gốc (@ hoặc _tn)
-                        let clean = src.split('@')[0].split('_tn')[0].split('_v')[0];
+                const add = (src) => {
+                    if (!src || typeof src !== 'string') return;
+                    const s = src.trim();
+                    // Shopee CDN: usercontent, shopee.com/file, cdn.shopee, down-*.img
+                    if (s.includes('usercontent') || s.includes('shopee.com/file') || s.includes('cdn.shopee') || /down-[a-z0-9-]+\\.img\\./.test(s) || (s.includes('shopee') && s.includes('img'))) {
+                        let clean = s.split('@')[0].split('_tn')[0].split('_v')[0];
                         if (!clean.startsWith('http')) clean = 'https:' + clean;
-                        // Chỉ lấy các ảnh có vẻ là ảnh sản phẩm (kích thước lớn)
                         urls.add(clean);
                     }
+                };
+                document.querySelectorAll('img').forEach(img => {
+                    add(img.getAttribute('data-src') || img.getAttribute('src'));
                 });
-                return Array.from(urls).slice(0, 15);  // Lấy 15 ảnh để lọc
+                document.querySelectorAll('picture source').forEach(el => { add(el.getAttribute('srcset')?.split(' ')[0]); add(el.getAttribute('src')); });
+                return Array.from(urls).slice(0, 15);
             }""")
+            # Fallback: ảnh chính từ og:image
+            if not raw_urls or len(raw_urls) == 0:
+                try:
+                    og_img = page.evaluate("document.querySelector('meta[property=\"og:image\"]')?.content") or ""
+                    if og_img and "shopee" in og_img.lower():
+                        raw_urls = [og_img]
+                        logger.info("📷 Dùng og:image làm ảnh sản phẩm (fallback)")
+                except Exception:
+                    pass
             
             # Lọc ảnh sản phẩm thực (loại bỏ banner, voucher, model)
             filtered = self._filter_product_images(raw_urls)
             logger.info(f"📸 Lọc ảnh: {len(raw_urls)} -> {len(filtered)} ảnh sản phẩm")
-            
+            # Bỏ ảnh thứ 3 (index 2): trong DOM thường là video/banner "GIẢM" → render ra trắng khi làm video
+            if len(filtered) > 2:
+                filtered = filtered[:2] + filtered[3:]
+                logger.info("📷 Đã bỏ ảnh thứ 3 (video/banner) để tránh render trắng")
             return filtered[:10]  # Trả về max 10 ảnh
         except Exception as e:
             logger.error(f"❌ Failed to get images: {e}")
@@ -243,8 +308,8 @@ class ShopeeScraper(BaseScraper):
                 logger.debug(f"❌ Rejected: Local file path")
                 return False
             
-            # Must be from Shopee CDN
-            if not ('usercontent' in url or 'shopee.com/file/' in url or 'shopee' in url.lower()):
+            # Must be from Shopee CDN (bao gồm og:image, cdn, down-*.img)
+            if not ('usercontent' in url or 'shopee.com/file/' in url or 'shopee' in url.lower() or 'cdn.shopee' in url or re.search(r'down-[a-z0-9-]+\.img\.', url)):
                 logger.debug(f"❌ Rejected: Not Shopee CDN")
                 return False
             
@@ -327,50 +392,61 @@ class ShopeeScraper(BaseScraper):
             "short_description": "",
             "price": "0",
             "platform": "shopee",
-            "original_url": url
+            "original_url": url,
+            "_scrape_failed": False,
         }
 
     def _get_price(self, page) -> str:
-        """Lấy giá sản phẩm từ Shopee"""
+        """Lấy giá sản phẩm từ Shopee (nhiều selector + JSON fallback)"""
         try:
             price = page.evaluate("""() => {
-                // Các selector phổ biến cho giá trên Shopee
+                function parsePriceNum(text) {
+                    if (!text) return null;
+                    const m = text.replace(/[.,\\s₫]/g, '').match(/\\d+/);
+                    return m ? m[0] : null;
+                }
+                // 1. Selector giá hiện tại (Shopee 2024-2025)
                 const priceSelectors = [
-                    '.product-price__current-price',           // Giá hiện tại
-                    'span.shopee-price__current',              // Class cũ
-                    '[data-testid="product-price"]',           
-                    'div._3I7_6e',                             // Class Shopee 2024-2025
-                    'div.shopee-product-rating',              
+                    '.product-price__current-price',
+                    'span.shopee-price__current',
+                    '[data-testid="product-price"]',
+                    'div._3I7_6e',
+                    '.pqTWkA', '.ZEgDHl', '.GcqTgR',
+                    '[class*="price"] span',
+                    '.shopee-product-info__main-price',
                     '.product-price'
                 ];
-                
-                for (let sel of priceSelectors) {
+                for (const sel of priceSelectors) {
                     const el = document.querySelector(sel);
                     if (el) {
-                        let text = el.innerText?.trim() || '';
-                        // Lấy con số từ text (loại bỏ ₫, dấu phẩy, khoảng trắng)
-                        const nums = text.match(/\\d+[\\d.,]*\\d*/);
-                        if (nums) {
-                            return nums[0].replace(/[.,]/g, '');  // '123.456' -> '123456'
-                        }
+                        const text = (el.innerText || el.textContent || '').trim();
+                        const num = parsePriceNum(text);
+                        if (num && num.length >= 4 && num.length <= 9) return num;
                     }
                 }
-                
-                // Fallback: tìm số lớn nhất trên trang (thường là giá)
-                const bodyText = document.body.innerText;
-                const pricePattern = /₫\s*[\d.,]+/g;
-                const matches = bodyText.match(pricePattern);
-                if (matches && matches.length > 0) {
-                    let price = matches[0].replace(/[₫\s.,]/g, '');
-                    // Lọc để chỉ lấy giá hợp lý (1000-999999999)
-                    if (price.length >= 4 && price.length <= 9) {
-                        return price;
+                // 2. Tất cả node chứa ₫
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                let node;
+                while (node = walker.nextNode()) {
+                    const t = node.textContent || '';
+                    if (t.includes('₫')) {
+                        const num = parsePriceNum(t);
+                        if (num && num.length >= 4 && num.length <= 9) return num;
                     }
                 }
-                
+                // 3. Regex toàn trang (giá VND: 4-9 chữ số)
+                const bodyText = document.body.innerText || '';
+                const matches = bodyText.match(/[\\d.,]{4,}/g);
+                if (matches) {
+                    for (const m of matches) {
+                        const num = m.replace(/[.,]/g, '');
+                        if (num.length >= 4 && num.length <= 9 && parseInt(num, 10) >= 1000)
+                            return num;
+                    }
+                }
                 return '0';
             }""")
-            return price or '0'
+            return str(price).strip() if price else '0'
         except Exception as e:
             logger.debug(f"⚠️ Failed to get price: {e}")
             return '0'

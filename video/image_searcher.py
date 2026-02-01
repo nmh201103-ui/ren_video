@@ -77,23 +77,13 @@ class ImageSearcher:
             # Find downloaded images
             dataset_path = os.path.join("dataset", safe_query.replace(" ", "_"))
             if not os.path.exists(dataset_path):
-                # Try finding folder by first word of sanitized query
+                # Try finding folder by first word of sanitized query only (no random "latest" folder)
                 first_word = safe_query.split()[0].lower() if safe_query.split() else ""
                 for folder in os.listdir("dataset") if os.path.exists("dataset") else []:
                     if folder.lower().startswith(first_word):
                         dataset_path = os.path.join("dataset", folder)
                         break
-                # Fallback: pick most recently modified folder
-                if not os.path.exists(dataset_path) and os.path.exists("dataset"):
-                    try:
-                        folders = [os.path.join("dataset", f) for f in os.listdir("dataset")]
-                        folders = [f for f in folders if os.path.isdir(f)]
-                        if folders:
-                            latest = max(folders, key=lambda p: os.path.getmtime(p))
-                            dataset_path = latest
-                            logger.info(f"   ↳ Using latest dataset folder: {os.path.basename(latest)}")
-                    except Exception:
-                        pass
+                # Do NOT use "latest dataset folder" - that reuses unrelated old images and breaks story sync
             
             if os.path.exists(dataset_path):
                 images = [f for f in os.listdir(dataset_path) if f.endswith(('.jpg', '.png', '.jpeg'))][:num_images]

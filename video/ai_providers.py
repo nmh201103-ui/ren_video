@@ -18,14 +18,20 @@ class ScriptGenerator:
         raise NotImplementedError
 
 class HeuristicScriptGenerator(ScriptGenerator):
-    """Fallback simple heuristic"""
+    """Fallback: script chuyên nghiệp, không nhắc tên sàn/shop."""
     def generate(self, title: str, description: str, price: str):
-        p = price if price and price != "0" else "giá cực hời"
+        # Bỏ tên sàn/shop trong title (vd "Sản phẩm Shopee" -> dùng mô tả hoặc "sản phẩm")
+        product_name = (title or "").strip()
+        if not product_name or product_name.lower() in ("sản phẩm shopee", "shopee"):
+            product_name = (description or "Sản phẩm")[:40].strip() or "Sản phẩm"
+        else:
+            product_name = product_name[:50]
+        p = price if price and str(price).strip() != "0" else "giá tốt"
         return [
-            f"Khám phá ngay: {title[:50]}",
-            "Sản phẩm cực chất, thiết kế tinh tế.",
-            f"Chất liệu cao cấp, độ bền vượt trội.",
-            f"Chỉ {p}, chốt đơn ngay kẻo lỡ!"
+            f"Bạn đang tìm sản phẩm chất lượng? {product_name} là lựa chọn đáng cân nhắc.",
+            "Thiết kế tinh tế, chất liệu cao cấp, độ bền tốt.",
+            "Phù hợp nhu cầu hàng ngày, dễ phối đồ.",
+            f"Chỉ {p} — mua ngay để nhận ưu đãi."
         ]
 
 class OpenAIScriptGenerator(ScriptGenerator):
@@ -44,20 +50,22 @@ class OpenAIScriptGenerator(ScriptGenerator):
 
         style = os.getenv("LLM_STYLE", "default")
         prompt = f"""
-        Tạo kịch bản video ngắn (4 câu) quảng cáo sản phẩm sau:
-        Tên: {title}
-        Mô tả: {description}
+        Tạo kịch bản video ngắn (4 câu) quảng cáo sản phẩm. Giọng chuyên nghiệp, tự nhiên.
+        Tên sản phẩm: {title}
+        Mô tả: {description[:600]}
         Giá: {price}
         
-        Phong cách: {style} (nếu là veo3/sora thì làm cực kỳ lôi cuốn, có hook mạnh).
+        QUAN TRỌNG:
+        - KHÔNG nhắc tên sàn (Shopee, Lazada...), KHÔNG nhắc tên shop trong lời đọc.
+        - Chỉ nói tên sản phẩm và lợi ích. CTA chỉ cần giá + "mua ngay", không gắn tên sàn.
         
         Yêu cầu:
-        1. Câu 1: Hook gây chú ý.
-        2. Câu 2: Giới thiệu giải pháp/sản phẩm.
-        3. Câu 3: Lợi ích chính.
-        4. Câu 4: Kêu gọi hành động (CTA) kèm giá.
+        1. Hook gây chú ý (theo sản phẩm, không theo sàn).
+        2. Giới thiệu sản phẩm / giải pháp.
+        3. Lợi ích chính.
+        4. Kêu gọi hành động kèm giá (vd: "Chỉ X — mua ngay.").
         
-        Trả về kết quả là một mảng JSON 4 câu tiếng Việt. Chỉ trả về JSON, không giải thích gì thêm.
+        Trả về ĐÚNG một mảng JSON 4 chuỗi tiếng Việt. Chỉ JSON, không giải thích.
         """
         try:
             response = self.client.chat.completions.create(
@@ -101,19 +109,18 @@ class OllamaScriptGenerator(ScriptGenerator):
     def generate(self, title: str, description: str, price: str) -> List[str]:
         style = os.getenv("LLM_STYLE", "default")
         prompt = f"""
-        Generate a 4-sentence TikTok/Shorts script in Vietnamese for this product.
-        Title: {title}
+        Generate a 4-sentence TikTok/Shorts script in Vietnamese. Professional tone.
+        Product title: {title}
         Desc: {description[:500]}
         Price: {price}
         Style: {style}
         
-        Requirements: 
-        1. Hook
-        2. Solution
-        3. Benefit
-        4. CTA (include price)
+        RULES:
+        - Do NOT mention platform name (Shopee, Lazada) or shop name in the script.
+        - Only mention product name and benefits. CTA: price + "mua ngay" only.
         
-        Return ONLY a JSON list of 4 strings.
+        Structure: 1) Hook (product-focused) 2) Product/solution 3) Benefits 4) CTA with price.
+        Return ONLY a JSON list of 4 strings. Example: ["...", "...", "...", "..."]
         """
         resp = self._run_cli(prompt)
         try:

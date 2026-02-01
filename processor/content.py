@@ -79,7 +79,11 @@ class ContentProcessor:
     def _clean_title(self, title: str) -> str:
         title = re.sub(r'<[^>]+>', '', title)
         title = re.sub(r'[^\w\s\-.,!?()]', '', title)
-        return ' '.join(title.split()).strip()
+        title = ' '.join(title.split()).strip()
+        # Bỏ phần tên sàn/shop ở cuối (vd "... | Shopee", "... - NANA SHOP") — chuyên nghiệp
+        title = re.sub(r'\s*[|\-]\s*Shopee.*$', '', title, flags=re.I)
+        title = re.sub(r'\s*-\s*[A-Z0-9\s]+SHOP\.?\s*$', '', title, flags=re.I)
+        return title.strip()
     
     def _clean_text(self, text: str) -> str:
         text = re.sub(r'<[^>]+>', '', text)
@@ -120,4 +124,5 @@ class ContentProcessor:
         return result
 
     def _generate_cta(self, platform: str) -> str:
-        return f"Mua ngay trên {platform.capitalize()}!"
+        # CTA trung lập, không nhắc tên sàn — chuyên nghiệp
+        return "Mua ngay"
