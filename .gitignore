@@ -23,18 +23,20 @@ wheels/
 .installed.cfg
 *.egg
 
-# IDE
+# IDE / editor
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.bak
 
 # OS
 .DS_Store
 Thumbs.db
 
 # Project specific
+.env
 output/videos/*.mp4
 temp*.jpg
 temp*.png
