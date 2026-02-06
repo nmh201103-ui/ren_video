@@ -35,6 +35,13 @@ def _devices():
             devices.append(parts[0])
     return devices
 
+def _try_connect_emulator():
+    """Nếu chưa thấy device, thử connect LDPlayer/BlueStacks/Nox (port 5555, 5565)."""
+    if _devices():
+        return
+    for port in [5555, 5565, 5554]:
+        _run_adb("connect", "127.0.0.1:%s" % port, timeout=5)
+
 def upload_video_to_tiktok(
     video_path: str,
     username: str = "",
@@ -51,7 +58,10 @@ def upload_video_to_tiktok(
     video_path = os.path.abspath(video_path)
     devices = _devices()
     if not devices:
-        return False, "Không thấy emulator/thiết bị. Bật BlueStacks/LDPlayer/Nox và bật ADB (Cài đặt → ADB)."
+        _try_connect_emulator()
+        devices = _devices()
+    if not devices:
+        return False, "Không thấy emulator/thiết bị. Bật BlueStacks/LDPlayer/Nox và bật ADB (Cài đặt → ADB). Nếu đã bật: mở Cmd/PowerShell, gõ adb connect 127.0.0.1:5555 rồi thử lại."
     dev = device_id or devices[0]
     # 1. Push video vào /sdcard/Download/
     remote = "/sdcard/Download/affiliate_video.mp4"

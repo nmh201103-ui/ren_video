@@ -18,11 +18,12 @@ from moviepy.editor import (
 
 from utils.logger import get_logger
 from video.ai_providers import (
-    GTTSProvider, 
-    HeuristicScriptGenerator, 
-    OllamaScriptGenerator, 
+    GTTSProvider,
+    EdgeTTSProvider,
+    HeuristicScriptGenerator,
+    OllamaScriptGenerator,
     OpenAIScriptGenerator,
-    MovieScriptGenerator
+    MovieScriptGenerator,
 )
 from video.did_avatar import DIDTalkingAvatar
 from video.wav2lip_avatar import Wav2LipAvatar
@@ -40,13 +41,35 @@ logger = get_logger()
 if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
+
+def _create_tts():
+    """Ưu tiên Edge-TTS (có nhấn nhá, rate/pitch); fallback gTTS."""
+    provider = os.getenv("TTS_PROVIDER", "").strip().lower()
+    if provider == "gtts":
+        return GTTSProvider()
+    if provider == "edge" or provider == "edge-tts":
+        voice = os.getenv("EDGE_TTS_VOICE", "").strip() or None
+        p = EdgeTTSProvider(voice=voice or "vi-VN-HoaiMyNeural", use_prosody=True)
+        logger.info("Using Edge-TTS (prosody: rate/pitch by scene)")
+        return p
+    try:
+        import edge_tts  # noqa: F401
+        voice = os.getenv("EDGE_TTS_VOICE", "").strip() or "vi-VN-HoaiMyNeural"
+        p = EdgeTTSProvider(voice=voice, use_prosody=True)
+        logger.info("Using Edge-TTS (prosody: rate/pitch by scene)")
+        return p
+    except ImportError:
+        logger.info("Using gTTS (install edge-tts for better prosody)")
+        return GTTSProvider()
+
+
 class SmartVideoRenderer:
 
     def __init__(self, template=None, video_mode="simple", use_ai_avatar=False, avatar_backend="wav2lip", content_type="product"):
         # HIGH QUALITY: 1080p @ 30fps cho TikTok/Shorts (giống Sora/Veo)
         self.template = template or {"width": 1080, "height": 1920, "fps": 30}
         self.temp_files = []
-        self.tts = GTTSProvider()
+        self.tts = _create_tts()
         self.video_mode = video_mode  # "simple", "demo"
         self.person_image_path = None  # For demo mode
         self.use_ai_avatar = use_ai_avatar  # Enable AI talking avatar
@@ -225,8 +248,12 @@ class SmartVideoRenderer:
                 else:
                     img = None
 
-                # generate audio first to decide scene duration
-                audio_path = self.tts.tts_to_file(text)
+                # generate audio first to decide scene duration (scene_index for prosody)
+                audio_path = self.tts.tts_to_file(
+                    text,
+                    scene_index=idx,
+                    total_scenes=len(script),
+                )
 
                 if audio_path and os.path.exists(audio_path):
                     audio = AudioFileClip(audio_path)
@@ -341,8 +368,12 @@ class SmartVideoRenderer:
                     progress = 20 + (idx + 1) * 60 // max(1, total)
                     progress_callback(f"Scene {idx+1}/{total}: voice-over", progress)
 
-                # Generate narration audio
-                audio_path = self.tts.tts_to_file(narration)
+                # Generate narration audio (scene_index for prosody)
+                audio_path = self.tts.tts_to_file(
+                    narration,
+                    scene_index=idx,
+                    total_scenes=total,
+                )
                 if audio_path:
                     self.temp_files.append(audio_path)
                 audio_clip = AudioFileClip(audio_path) if audio_path and os.path.exists(audio_path) else None

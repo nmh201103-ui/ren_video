@@ -4,9 +4,20 @@ import tempfile
 import logging
 import json
 import subprocess
-from typing import List, Optional
+from typing import List, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Từ/cụm cần nhấn mạnh khi đọc (chậm hơn một chút)
+PROSODY_EMPHASIS_KEYWORDS = (
+    "chỉ", "đặc biệt", "quan trọng", "nhất", "ngay", "giá", "ưu đãi",
+    "miễn phí", "giảm", "sale", "hot", "mới", "chính hãng", "chất lượng",
+    "đáng", "tuyệt", "đừng bỏ lỡ", "hãy", "ngay bây giờ", "hôm nay",
+)
+
+# Edge-TTS Vietnamese voices (Microsoft Neural)
+EDGE_TTS_VI_FEMALE = "vi-VN-HoaiMyNeural"
+EDGE_TTS_VI_MALE = "vi-VN-NamMinhNeural"
 
 # =========================
 # 1️⃣ SCRIPT GENERATOR
@@ -231,12 +242,91 @@ class MovieScriptGenerator(ScriptGenerator):
 # 2️⃣ TTS PROVIDER
 # =========================
 
+def _prosody_rate_for_scene(scene_index: int, total_scenes: int) -> str:
+    """Tính rate % cho từng đoạn: câu đầu/cuối chậm hơn (nhấn nhá), giữa bình thường."""
+    if total_scenes <= 0:
+        return "+0%"
+    if scene_index == 0:
+        return "-8%"
+    if scene_index >= total_scenes - 1:
+        return "-5%"
+    return "+2%"
+
+
+def _rate_for_sentence(sentence: str, base_rate: str) -> str:
+    """Dựa vào nội dung câu (dấu câu, từ khóa) để chọn tốc độ đọc."""
+    s = sentence.strip()
+    if not s:
+        return base_rate
+    lower = s.lower()
+    # Câu hỏi → chậm hơn để tự nhiên
+    if s.endswith("?") or "?" in s[-2:]:
+        return "-6%"
+    # Câu cảm thán → nhấn mạnh
+    if s.endswith("!") or "!" in s[-2:]:
+        return "-5%"
+    # Dấu ba chấm / gạch ngang → kéo dài, dramatic
+    if s.endswith("...") or s.endswith("…") or s.endswith("—"):
+        return "-8%"
+    # Có từ cần nhấn mạnh (giá, chỉ, đặc biệt, ...)
+    for kw in PROSODY_EMPHASIS_KEYWORDS:
+        if kw in lower:
+            return "-5%"
+    # Câu ngắn (dưới ~6 từ) thường là nhấn mạnh
+    if len(s.split()) <= 5:
+        return "-3%"
+    return base_rate
+
+
+def _split_sentences_for_prosody(text: str) -> List[str]:
+    """Tách văn bản thành các câu (giữ dấu câu) để gán rate từng câu."""
+    if not text or not text.strip():
+        return []
+    # Tách theo . ! ? ... … và giữ phần sau dấu
+    pattern = r"(?<=[.!?…])\s+|\s*—\s*|\s+\.\.\.\s+"
+    parts = re.split(pattern, text.strip())
+    sentences = [p.strip() for p in parts if p.strip()]
+    # Nếu không tách được câu nào (không có dấu kết thúc), trả về cả đoạn
+    if not sentences:
+        return [text.strip()]
+    return sentences
+
+
+def _content_aware_prosody_fragments(
+    text: str,
+    scene_index: Optional[int] = None,
+    total_scenes: Optional[int] = None,
+    base_rate: str = "-3%",
+) -> List[Tuple[str, str]]:
+    """
+    Phân tích nội dung, tách câu và gán rate cho từng câu.
+    Returns: [(fragment_text, rate_str), ...]
+    """
+    sentences = _split_sentences_for_prosody(text)
+    if not sentences:
+        return [(text.strip(), base_rate)] if text.strip() else []
+
+    # Điều chỉnh base theo vị trí scene (hook/cuối chậm hơn)
+    if total_scenes and total_scenes > 0:
+        if scene_index == 0:
+            base_rate = "-8%"
+        elif scene_index is not None and scene_index >= total_scenes - 1:
+            base_rate = "-5%"
+        else:
+            base_rate = "+0%"
+
+    return [(_s, _rate_for_sentence(_s, base_rate)) for _s in sentences]
+
+
 class TTSProvider:
-    def tts_to_file(self, text: str) -> Optional[str]:
+    def tts_to_file(self, text: str, **kwargs: Any) -> Optional[str]:
         raise NotImplementedError
 
+
 class GTTSProvider(TTSProvider):
-    def tts_to_file(self, text: str) -> Optional[str]:
+    """Google TTS - miễn phí nhưng giọng đều, ít nhấn nhá."""
+
+    def tts_to_file(self, text: str, **kwargs: Any) -> Optional[str]:
         try:
             from gtts import gTTS
             f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
@@ -246,12 +336,137 @@ class GTTSProvider(TTSProvider):
             logger.warning("gTTS failed: %s", e)
             return None
 
+
+class EdgeTTSProvider(TTSProvider):
+    """Microsoft Edge TTS - nhấn nhá theo nội dung (câu hỏi, cảm thán, từ khóa) + vị trí đoạn."""
+
+    def __init__(
+        self,
+        voice: str = EDGE_TTS_VI_FEMALE,
+        use_prosody: bool = True,
+        content_aware_prosody: bool = True,
+        base_rate: str = "-3%",
+        base_pitch: str = "+0Hz",
+    ):
+        self.voice = voice
+        self.use_prosody = use_prosody
+        self.content_aware_prosody = content_aware_prosody
+        self.base_rate = base_rate
+        self.base_pitch = base_pitch
+
+    def tts_to_file(
+        self,
+        text: str,
+        scene_index: Optional[int] = None,
+        total_scenes: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Optional[str]:
+        try:
+            import edge_tts
+        except ImportError:
+            logger.warning("edge-tts not installed. Run: pip install edge-tts")
+            return None
+
+        if not text or not text.strip():
+            return None
+
+        # Hiểu nội dung: tách câu và gán rate theo dấu câu + từ khóa
+        if self.use_prosody and self.content_aware_prosody:
+            fragments = _content_aware_prosody_fragments(
+                text,
+                scene_index=scene_index,
+                total_scenes=total_scenes,
+                base_rate=self.base_rate,
+            )
+            if len(fragments) <= 1:
+                rate = fragments[0][1] if fragments else self.base_rate
+                return self._generate_one(text.strip(), rate)
+            return self._generate_and_concat(fragments)
+
+        # Chỉ nhấn nhá theo vị trí scene (không phân tích câu)
+        if self.use_prosody and scene_index is not None and total_scenes is not None:
+            rate = _prosody_rate_for_scene(scene_index, total_scenes)
+        else:
+            rate = self.base_rate
+        return self._generate_one(text.strip(), rate)
+
+    def _generate_one(self, text: str, rate: str) -> Optional[str]:
+        try:
+            import edge_tts
+            communicate = edge_tts.Communicate(
+                text,
+                voice=self.voice,
+                rate=rate,
+                pitch=self.base_pitch,
+            )
+            f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            communicate.save_sync(f.name)
+            return f.name
+        except Exception as e:
+            logger.warning("EdgeTTS failed: %s", e)
+            return None
+
+    def _generate_and_concat(self, fragments: List[Tuple[str, str]]) -> Optional[str]:
+        """Tạo audio từng câu với rate riêng rồi ghép lại thành một file."""
+        try:
+            import edge_tts
+            from moviepy.editor import AudioFileClip, concatenate_audioclips
+        except ImportError as e:
+            logger.warning("EdgeTTS or moviepy for concat: %s", e)
+            # Fallback: gộp text và đọc một rate
+            full = " ".join(f[0] for f in fragments)
+            rate = fragments[0][1] if fragments else self.base_rate
+            return self._generate_one(full, rate)
+
+        temp_paths: List[str] = []
+        try:
+            for frag_text, rate in fragments:
+                if not frag_text.strip():
+                    continue
+                com = edge_tts.Communicate(
+                    frag_text.strip(),
+                    voice=self.voice,
+                    rate=rate,
+                    pitch=self.base_pitch,
+                )
+                f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                com.save_sync(f.name)
+                temp_paths.append(f.name)
+
+            if not temp_paths:
+                return None
+            if len(temp_paths) == 1:
+                return temp_paths[0]
+
+            clips = [AudioFileClip(p) for p in temp_paths]
+            final = concatenate_audioclips(clips)
+            out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            final.write_audiofile(out.name, logger=None)
+            for c in clips:
+                c.close()
+            for p in temp_paths:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+            return out.name
+        except Exception as e:
+            logger.warning("EdgeTTS concat failed: %s", e)
+            for p in temp_paths:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+            full = " ".join(f[0] for f in fragments)
+            return self._generate_one(full, self.base_rate)
+
+
 class ElevenLabsTTSProvider(TTSProvider):
     def __init__(self, api_key: Optional[str], voice_id: str = "Rachel"):
         self.api_key = api_key
         self.voice_id = voice_id
 
-    def tts_to_file(self, text: str) -> Optional[str]:
+    def tts_to_file(self, text: str, **kwargs: Any) -> Optional[str]:
         if not self.api_key:
             return None
         return None  # Implement later or use gTTS as fallback
